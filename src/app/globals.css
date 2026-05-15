@@ -24,3 +24,149 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes stepwise-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes stepwise-message-in {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes stepwise-caret {
+  50% {
+    border-color: transparent;
+  }
+}
+
+@keyframes stepwise-dots {
+  0%,
+  20% {
+    opacity: 0;
+  }
+
+  50% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes stepwise-soft-glow {
+  0%,
+  100% {
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.06), 0 0 0 0 rgb(6 182 212 / 0);
+  }
+
+  50% {
+    box-shadow: 0 10px 30px rgb(6 182 212 / 0.12), 0 0 0 4px rgb(6 182 212 / 0.06);
+  }
+}
+
+@keyframes stepwise-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  50% {
+    transform: scale(1.04);
+    opacity: 0.82;
+  }
+}
+
+@keyframes menuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.stepwise-fade-in {
+  animation: stepwise-fade-up 0.75s ease both;
+}
+
+.stepwise-delay-1 {
+  animation-delay: 0.12s;
+}
+
+.stepwise-message {
+  opacity: 0;
+  animation: stepwise-message-in 0.55s ease both;
+}
+
+.stepwise-chat-message {
+  animation: stepwise-message-in 0.28s ease both;
+}
+
+.stepwise-thinking-dots {
+  display: inline-block;
+  width: 1.2em;
+  overflow: hidden;
+  vertical-align: bottom;
+  animation: stepwise-dots 1.2s ease-in-out infinite;
+}
+
+.stepwise-live-response {
+  animation: stepwise-message-in 0.28s ease both, stepwise-soft-glow 2.4s ease-in-out 1;
+}
+
+.stepwise-input-caret {
+  caret-color: #06b6d4;
+}
+
+.stepwise-thinking-avatar {
+  animation: stepwise-pulse 1.4s ease-in-out infinite;
+}
+
+.stepwise-type::after {
+  content: "";
+  margin-left: 2px;
+  border-right: 2px solid #06b6d4;
+  animation: stepwise-caret 0.9s step-end infinite;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .stepwise-reveal {
+    animation: stepwise-fade-up both;
+    animation-timeline: view();
+    animation-range: entry 8% cover 28%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stepwise-fade-in,
+  .stepwise-message,
+  .stepwise-chat-message,
+  .stepwise-live-response,
+  .stepwise-thinking-avatar,
+  .stepwise-reveal {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
