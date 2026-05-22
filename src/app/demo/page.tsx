@@ -1619,6 +1619,142 @@ export default function DemoPage() {
     });
   }
 
+  async function enhanceHomeworkImageDataUrl(
+    file: File,
+    cropRegion?: CropRegion | null
+  ) {
+    if (!file.type.startsWith("image/")) {
+      return readFileAsDataUrl(file);
+    }
+
+    const sourceUrl = URL.createObjectURL(file);
+
+    try {
+      const image = await loadImage(sourceUrl);
+      const crop = getImageCropBox(image, cropRegion);
+      const longestSide = Math.max(crop.width, crop.height);
+      const upscaleFactor = longestSide < 1400 ? 1400 / longestSide : 1;
+      const scale = Math.min(2.25, upscaleFactor);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(crop.width * scale);
+      canvas.height = Math.round(crop.height * scale);
+
+      const context = canvas.getContext("2d");
+      if (!context) {
+        return readFileAsDataUrl(file);
+      }
+
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
+      context.filter = "grayscale(1) contrast(1.22) brightness(1.04)";
+      context.drawImage(
+        image,
+        crop.x,
+        crop.y,
+        crop.width,
+        crop.height,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+      context.filter = "none";
+      sharpenCanvas(context, canvas.width, canvas.height);
+
+      return await canvasToDataUrl(canvas);
+    } catch (error) {
+      console.warn("Image enhancement failed, using original upload.", error);
+      return readFileAsDataUrl(file);
+    } finally {
+      URL.revokeObjectURL(sourceUrl);
+    }
+  }
+
+  function loadImage(sourceUrl: string) {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("Image could not be loaded."));
+      image.src = sourceUrl;
+    });
+  }
+
+  function getImageCropBox(
+    image: HTMLImageElement,
+    cropRegion?: CropRegion | null
+  ) {
+    if (!cropRegion) {
+      return {
+        x: 0,
+        y: 0,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      };
+    }
+
+    const paddingPercent = 3;
+    const xPercent = clampPercent(cropRegion.x - paddingPercent);
+    const yPercent = clampPercent(cropRegion.y - paddingPercent);
+    const rightPercent = clampPercent(
+      cropRegion.x + cropRegion.width + paddingPercent
+    );
+    const bottomPercent = clampPercent(
+      cropRegion.y + cropRegion.height + paddingPercent
+    );
+
+    return {
+      x: Math.round((xPercent / 100) * image.naturalWidth),
+      y: Math.round((yPercent / 100) * image.naturalHeight),
+      width: Math.max(
+        1,
+        Math.round(((rightPercent - xPercent) / 100) * image.naturalWidth)
+      ),
+      height: Math.max(
+        1,
+        Math.round(((bottomPercent - yPercent) / 100) * image.naturalHeight)
+      ),
+    };
+  }
+
+  function sharpenCanvas(
+    context: CanvasRenderingContext2D,
+    width: number,
+    height: number
+  ) {
+    const imageData = context.getImageData(0, 0, width, height);
+    const pixels = imageData.data;
+
+    for (let index = 0; index < pixels.length; index += 4) {
+      const average = (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3;
+      const boosted = average > 184 ? Math.min(255, average + 18) : average * 0.9;
+      pixels[index] = boosted;
+      pixels[index + 1] = boosted;
+      pixels[index + 2] = boosted;
+    }
+
+    context.putImageData(imageData, 0, 0);
+  }
+
+  function canvasToDataUrl(canvas: HTMLCanvasElement) {
+    return new Promise<string>((resolve) => {
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            resolve(canvas.toDataURL("image/jpeg", 0.92));
+            return;
+          }
+
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.readAsDataURL(blob);
+        },
+        "image/jpeg",
+        0.92
+      );
+    });
+  }
+
   async function analyzeUploadedHomework(
     file: File,
     fileDataUrl: string,
@@ -1780,7 +1916,7 @@ export default function DemoPage() {
     );
 
     try {
-      const fileDataUrl = await readFileAsDataUrl(file);
+      const fileDataUrl = await enhanceHomeworkImageDataUrl(file);
       setUploadedFileDataUrl(fileDataUrl);
       const data = await analyzeUploadedHomework(file, fileDataUrl);
 
@@ -1812,9 +1948,13 @@ export default function DemoPage() {
 
     try {
       const cropRegion = normalizeCropRegion(cropDraft);
+      const croppedFileDataUrl = await enhanceHomeworkImageDataUrl(
+        uploadedFile,
+        cropRegion
+      );
       const data = await analyzeUploadedHomework(
         uploadedFile,
-        uploadedFileDataUrl,
+        croppedFileDataUrl,
         cropRegion
       );
 

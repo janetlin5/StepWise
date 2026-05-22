@@ -97,6 +97,7 @@ Trust rules:
 - If you are uncertain, lower the confidence and say what needs confirmation.
 - Never pretend you fully understood an unclear image.
 - If a diagram is present, mention it explicitly.
+- The image may be a low-quality phone photo: tilted, shadowed, blurry, faint, or partially cropped. Read it patiently from the visible structure, use problem numbers/regions to separate items, and mark anything uncertain instead of guessing.
 - The "message" field is shown directly to the student after upload. Make it conversational and lightweight.
 - In "message", briefly identify the actual worksheet context, then ask which problem they want help with.
 - Suggested examples in "message" must come only from visible/detected content.
@@ -327,6 +328,7 @@ ${mode === "targeted_tutoring"
               type: "image_url",
               image_url: {
                 url: fileDataUrl,
+                detail: "high",
               },
             },
           ],
