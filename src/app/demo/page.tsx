@@ -681,6 +681,8 @@ export default function DemoPage() {
   const [uploadedFileDataUrl, setUploadedFileDataUrl] = useState("");
   const [uploadedOriginalFileDataUrl, setUploadedOriginalFileDataUrl] =
     useState("");
+  const [uploadedReadingViewDataUrls, setUploadedReadingViewDataUrls] =
+    useState<string[]>([]);
   const [uploadPreviewUrl, setUploadPreviewUrl] = useState("");
   const [isComposerDragActive, setIsComposerDragActive] = useState(false);
   const [homeworkAnalysis, setHomeworkAnalysis] =
@@ -1672,6 +1674,104 @@ export default function DemoPage() {
     }
   }
 
+  async function createReferenceImageDataUrl(file: File) {
+    if (!file.type.startsWith("image/")) {
+      return readFileAsDataUrl(file);
+    }
+
+    const sourceUrl = URL.createObjectURL(file);
+
+    try {
+      const image = await loadImage(sourceUrl);
+      const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
+      const scale = Math.min(1, 1800 / longestSide);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(image.naturalWidth * scale);
+      canvas.height = Math.round(image.naturalHeight * scale);
+
+      const context = canvas.getContext("2d");
+      if (!context) {
+        return readFileAsDataUrl(file);
+      }
+
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+      return await canvasToDataUrl(canvas, 0.86);
+    } catch (error) {
+      console.warn("Reference image preparation failed, using original upload.", error);
+      return readFileAsDataUrl(file);
+    } finally {
+      URL.revokeObjectURL(sourceUrl);
+    }
+  }
+
+  async function buildHomeworkReadingViews(
+    file: File,
+    targetPrompt = ""
+  ) {
+    if (!file.type.startsWith("image/")) {
+      return [];
+    }
+
+    const regions = getHomeworkReadingRegions(targetPrompt);
+    const views = await Promise.all(
+      regions.map((region) => enhanceHomeworkImageDataUrl(file, region))
+    );
+
+    return Array.from(new Set(views)).slice(0, 4);
+  }
+
+  function getHomeworkReadingRegions(targetPrompt = ""): CropRegion[] {
+    const referencedNumber = getReferencedProblemNumber(targetPrompt);
+    const focusedRegion = referencedNumber
+      ? getEstimatedProblemRegion(referencedNumber)
+      : null;
+    const defaultRegions: CropRegion[] = [
+      { x: 3, y: 5, width: 64, height: 32 },
+      { x: 3, y: 20, width: 64, height: 36 },
+      { x: 3, y: 36, width: 64, height: 38 },
+      { x: 32, y: 52, width: 38, height: 34 },
+    ];
+
+    return uniqueRegions(
+      focusedRegion ? [focusedRegion, ...defaultRegions] : defaultRegions
+    );
+  }
+
+  function getReferencedProblemNumber(text: string) {
+    const match = text.match(/(?:#|problem|question|number|no\.)\s*(\d{1,2})\b/i);
+    return match ? Number(match[1]) : null;
+  }
+
+  function getEstimatedProblemRegion(problemNumber: number): CropRegion | null {
+    if (problemNumber >= 9 && problemNumber <= 16) {
+      const top = 5 + (problemNumber - 9) * 8.1;
+
+      return {
+        x: 3,
+        y: clampPercent(top - 2.5),
+        width: 66,
+        height: problemNumber === 15 ? 24 : 12,
+      };
+    }
+
+    return null;
+  }
+
+  function uniqueRegions(regions: CropRegion[]) {
+    const seen = new Set<string>();
+
+    return regions.filter((region) => {
+      const key = `${region.x}-${region.y}-${region.width}-${region.height}`;
+
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
   function loadImage(sourceUrl: string) {
     return new Promise<HTMLImageElement>((resolve, reject) => {
       const image = new Image();
@@ -1738,12 +1838,12 @@ export default function DemoPage() {
     context.putImageData(imageData, 0, 0);
   }
 
-  function canvasToDataUrl(canvas: HTMLCanvasElement) {
+  function canvasToDataUrl(canvas: HTMLCanvasElement, quality = 0.92) {
     return new Promise<string>((resolve) => {
       canvas.toBlob(
         (blob) => {
           if (!blob) {
-            resolve(canvas.toDataURL("image/jpeg", 0.92));
+            resolve(canvas.toDataURL("image/jpeg", quality));
             return;
           }
 
@@ -1752,7 +1852,7 @@ export default function DemoPage() {
           reader.readAsDataURL(blob);
         },
         "image/jpeg",
-        0.92
+        quality
       );
     });
   }
@@ -1763,7 +1863,8 @@ export default function DemoPage() {
     cropRegion?: CropRegion | null,
     targetPrompt?: string,
     mode: "extract" | "targeted_tutoring" = "extract",
-    originalFileDataUrl?: string
+    originalFileDataUrl?: string,
+    readingViewDataUrls: string[] = []
   ) {
     const authHeaders = await getAuthHeaders();
     const response = await fetchWithTimeout(
@@ -1779,6 +1880,7 @@ export default function DemoPage() {
           fileType: file.type,
           fileDataUrl,
           originalFileDataUrl,
+          readingViewDataUrls,
           mode,
           targetPrompt,
           cropRegion,
@@ -1905,6 +2007,7 @@ export default function DemoPage() {
     setHomeworkAnalysis(null);
     setActiveWorksheetContext(null);
     setUploadedOriginalFileDataUrl("");
+    setUploadedReadingViewDataUrls([]);
     setSelectedHomeworkProblemId("");
     setEditedExtractedProblem("");
     setCropModeOpen(false);
@@ -1921,9 +2024,13 @@ export default function DemoPage() {
     );
 
     try {
-      const originalFileDataUrl = await readFileAsDataUrl(file);
-      const fileDataUrl = await enhanceHomeworkImageDataUrl(file);
+      const [originalFileDataUrl, fileDataUrl, readingViewDataUrls] = await Promise.all([
+        createReferenceImageDataUrl(file),
+        enhanceHomeworkImageDataUrl(file),
+        buildHomeworkReadingViews(file),
+      ]);
       setUploadedOriginalFileDataUrl(originalFileDataUrl);
+      setUploadedReadingViewDataUrls(readingViewDataUrls);
       setUploadedFileDataUrl(fileDataUrl);
       const data = await analyzeUploadedHomework(
         file,
@@ -1931,7 +2038,8 @@ export default function DemoPage() {
         null,
         undefined,
         "extract",
-        originalFileDataUrl
+        originalFileDataUrl,
+        readingViewDataUrls
       );
 
       if (data) {
@@ -1972,7 +2080,8 @@ export default function DemoPage() {
         cropRegion,
         undefined,
         "extract",
-        uploadedOriginalFileDataUrl
+        uploadedOriginalFileDataUrl,
+        uploadedReadingViewDataUrls
       );
 
       if (!data) return;
@@ -2045,13 +2154,20 @@ export default function DemoPage() {
     const thinkingTimer = showThinkingAfterDelay("Reading the uploaded problem...");
 
     try {
+      const targetedReadingViewDataUrls = await buildHomeworkReadingViews(
+        uploadedFile,
+        studentMessage
+      );
       const data = await analyzeUploadedHomework(
         uploadedFile,
         uploadedFileDataUrl,
         null,
         studentMessage,
         "targeted_tutoring",
-        uploadedOriginalFileDataUrl
+        uploadedOriginalFileDataUrl,
+        targetedReadingViewDataUrls.length
+          ? targetedReadingViewDataUrls
+          : uploadedReadingViewDataUrls
       );
 
       if (!data) return;
