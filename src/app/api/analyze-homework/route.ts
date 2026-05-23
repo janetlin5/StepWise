@@ -22,6 +22,7 @@ type AnalyzeHomeworkRequest = {
   fileName?: string;
   fileType?: string;
   fileDataUrl?: string;
+  originalFileDataUrl?: string;
   mode?: "extract" | "targeted_tutoring";
   targetPrompt?: string;
   cropRegion?: CropRegion | null;
@@ -98,6 +99,8 @@ Trust rules:
 - Never pretend you fully understood an unclear image.
 - If a diagram is present, mention it explicitly.
 - The image may be a low-quality phone photo: tilted, shadowed, blurry, faint, or partially cropped. Read it patiently from the visible structure, use problem numbers/regions to separate items, and mark anything uncertain instead of guessing.
+- If both an enhanced image and an original image are provided, compare them before extracting math. Use the enhanced image for text contrast, but use the original image to verify fractions, signs, exponents, parentheses, and trig notation.
+- For trig worksheets, preserve the equation structure exactly. For example, distinguish "csc θ = -5/4 and cot θ > 0" from "csc(θ = -4/3)"; do not move a right-hand-side fraction into a trig function's argument.
 - The "message" field is shown directly to the student after upload. Make it conversational and lightweight.
 - In "message", briefly identify the actual worksheet context, then ask which problem they want help with.
 - Suggested examples in "message" must come only from visible/detected content.
@@ -213,6 +216,7 @@ export async function POST(request: Request) {
     const fileName = body.fileName?.trim() || "uploaded homework";
     const fileType = body.fileType?.trim() || "";
     const fileDataUrl = body.fileDataUrl ?? "";
+    const originalFileDataUrl = body.originalFileDataUrl ?? "";
     const mode = body.mode ?? "extract";
     const targetPrompt = body.targetPrompt?.trim() ?? "";
     const cropRegion = body.cropRegion ?? null;
@@ -306,6 +310,11 @@ export async function POST(request: Request) {
               type: "text",
               text: `
 Analyze this uploaded homework image: ${fileName}.
+The first image is an enhanced copy optimized for reading. ${
+  originalFileDataUrl && originalFileDataUrl !== fileDataUrl
+    ? "The second image is the original upload; compare it against the enhanced copy before extracting exact math."
+    : "Only one image view is available."
+}
 ${cropRegion ? `Focus especially on this selected image region in percentages: ${JSON.stringify(cropRegion)}.` : ""}
 ${targetPrompt ? `Student wants help with: ${targetPrompt}` : ""}
 Answer-checking intent: ${
@@ -331,6 +340,17 @@ ${mode === "targeted_tutoring"
                 detail: "high",
               },
             },
+            ...(originalFileDataUrl && originalFileDataUrl !== fileDataUrl
+              ? [
+                  {
+                    type: "image_url" as const,
+                    image_url: {
+                      url: originalFileDataUrl,
+                      detail: "high" as const,
+                    },
+                  },
+                ]
+              : []),
           ],
         },
       ],

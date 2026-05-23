@@ -679,6 +679,8 @@ export default function DemoPage() {
   const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploadedFileDataUrl, setUploadedFileDataUrl] = useState("");
+  const [uploadedOriginalFileDataUrl, setUploadedOriginalFileDataUrl] =
+    useState("");
   const [uploadPreviewUrl, setUploadPreviewUrl] = useState("");
   const [isComposerDragActive, setIsComposerDragActive] = useState(false);
   const [homeworkAnalysis, setHomeworkAnalysis] =
@@ -1760,7 +1762,8 @@ export default function DemoPage() {
     fileDataUrl: string,
     cropRegion?: CropRegion | null,
     targetPrompt?: string,
-    mode: "extract" | "targeted_tutoring" = "extract"
+    mode: "extract" | "targeted_tutoring" = "extract",
+    originalFileDataUrl?: string
   ) {
     const authHeaders = await getAuthHeaders();
     const response = await fetchWithTimeout(
@@ -1775,6 +1778,7 @@ export default function DemoPage() {
           fileName: file.name,
           fileType: file.type,
           fileDataUrl,
+          originalFileDataUrl,
           mode,
           targetPrompt,
           cropRegion,
@@ -1900,6 +1904,7 @@ export default function DemoPage() {
     setConfirmedUploadProblem(false);
     setHomeworkAnalysis(null);
     setActiveWorksheetContext(null);
+    setUploadedOriginalFileDataUrl("");
     setSelectedHomeworkProblemId("");
     setEditedExtractedProblem("");
     setCropModeOpen(false);
@@ -1916,9 +1921,18 @@ export default function DemoPage() {
     );
 
     try {
+      const originalFileDataUrl = await readFileAsDataUrl(file);
       const fileDataUrl = await enhanceHomeworkImageDataUrl(file);
+      setUploadedOriginalFileDataUrl(originalFileDataUrl);
       setUploadedFileDataUrl(fileDataUrl);
-      const data = await analyzeUploadedHomework(file, fileDataUrl);
+      const data = await analyzeUploadedHomework(
+        file,
+        fileDataUrl,
+        null,
+        undefined,
+        "extract",
+        originalFileDataUrl
+      );
 
       if (data) {
         updateActiveWorksheetContext(file, data);
@@ -1955,7 +1969,10 @@ export default function DemoPage() {
       const data = await analyzeUploadedHomework(
         uploadedFile,
         croppedFileDataUrl,
-        cropRegion
+        cropRegion,
+        undefined,
+        "extract",
+        uploadedOriginalFileDataUrl
       );
 
       if (!data) return;
@@ -2033,7 +2050,8 @@ export default function DemoPage() {
         uploadedFileDataUrl,
         null,
         studentMessage,
-        "targeted_tutoring"
+        "targeted_tutoring",
+        uploadedOriginalFileDataUrl
       );
 
       if (!data) return;
