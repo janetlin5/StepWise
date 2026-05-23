@@ -1729,10 +1729,10 @@ export default function DemoPage() {
       ? getEstimatedProblemRegion(referencedNumber)
       : null;
     const defaultRegions: CropRegion[] = [
-      { x: 3, y: 5, width: 64, height: 32 },
-      { x: 3, y: 20, width: 64, height: 36 },
-      { x: 3, y: 36, width: 64, height: 38 },
-      { x: 32, y: 52, width: 38, height: 34 },
+      { x: 3, y: 4, width: 67, height: 22 },
+      { x: 3, y: 19, width: 72, height: 22 },
+      { x: 3, y: 31, width: 72, height: 28 },
+      { x: 28, y: 55, width: 42, height: 36 },
     ];
 
     return uniqueRegions(
@@ -1746,18 +1746,18 @@ export default function DemoPage() {
   }
 
   function getEstimatedProblemRegion(problemNumber: number): CropRegion | null {
-    if (problemNumber >= 9 && problemNumber <= 16) {
-      const top = 5 + (problemNumber - 9) * 8.1;
+    const worksheetRowRegions: Record<number, CropRegion> = {
+      9: { x: 3, y: 2, width: 67, height: 10 },
+      10: { x: 3, y: 7, width: 67, height: 10 },
+      11: { x: 3, y: 13, width: 67, height: 10 },
+      12: { x: 3, y: 18, width: 67, height: 10 },
+      13: { x: 2, y: 22, width: 72, height: 14 },
+      14: { x: 2, y: 29, width: 72, height: 14 },
+      15: { x: 2, y: 37, width: 72, height: 25 },
+      16: { x: 28, y: 58, width: 42, height: 34 },
+    };
 
-      return {
-        x: 3,
-        y: clampPercent(top - 2.5),
-        width: 66,
-        height: problemNumber === 15 ? 24 : 12,
-      };
-    }
-
-    return null;
+    return worksheetRowRegions[problemNumber] ?? null;
   }
 
   function uniqueRegions(regions: CropRegion[]) {

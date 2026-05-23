@@ -102,6 +102,7 @@ Trust rules:
 - The image may be a low-quality phone photo: tilted, shadowed, blurry, faint, or partially cropped. Read it patiently from the visible structure, use problem numbers/regions to separate items, and mark anything uncertain instead of guessing.
 - If both an enhanced image and an original image are provided, compare them before extracting math. Use the enhanced image for text contrast, but use the original image to verify fractions, signs, exponents, parentheses, and trig notation.
 - If close-up reading views are provided, inspect them before giving up on a blurry full-page photo. They may show the same worksheet in cropped sections or a likely target problem row.
+- When the student asks for a numbered problem, the first close-up reading view is the most likely target row. Read that row first, then use the full page only for surrounding context.
 - For trig worksheets, preserve the equation structure exactly. For example, distinguish "csc θ = -5/4 and cot θ > 0" from "csc(θ = -4/3)"; do not move a right-hand-side fraction into a trig function's argument.
 - The "message" field is shown directly to the student after upload. Make it conversational and lightweight.
 - In "message", briefly identify the actual worksheet context, then ask which problem they want help with.
@@ -295,7 +296,7 @@ export async function POST(request: Request) {
       model:
         process.env.OPENAI_VISION_MODEL ??
         process.env.OPENAI_MODEL ??
-        "gpt-4.1-mini",
+        "gpt-4.1",
       messages: [
         {
           role: "system",
@@ -321,6 +322,7 @@ The first image is an enhanced copy optimized for reading. ${
     : "Only one image view is available."
 }
 ${readingViewDataUrls.length ? `Additional close-up reading views are provided after the full-page image(s). Use these crops to read small worksheet text and target problem rows.` : ""}
+${targetPrompt && readingViewDataUrls.length ? "For the student's requested problem, prioritize the first close-up reading view. If it contains multiple problem rows, extract only the row matching the requested problem number." : ""}
 ${cropRegion ? `Focus especially on this selected image region in percentages: ${JSON.stringify(cropRegion)}.` : ""}
 ${targetPrompt ? `Student wants help with: ${targetPrompt}` : ""}
 Answer-checking intent: ${
