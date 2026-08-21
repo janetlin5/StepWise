@@ -145,6 +145,18 @@ type LearningRecommendation = {
   suggestedNext: string;
 };
 
+type ConfidenceLevel = "still_confused" | "getting_it" | "confident";
+
+type PracticeQueueItem = {
+  id: string;
+  title: string;
+  description: string;
+  topic: string;
+  difficulty: string;
+  style: string;
+  skills: string[];
+};
+
 const DEMO_LIMIT = 5;
 const anonymousDemoUsageCookie = "stepwise_demo_usage";
 
@@ -286,6 +298,32 @@ const checkpointPracticeStyles = [
   "Harder Version",
   "Retry With Less Help",
   "Mixed Review",
+];
+
+const confidenceOptions: Array<{
+  level: ConfidenceLevel;
+  label: string;
+  profileConfidence: LearningProfile["confidenceLevel"];
+  practiceStyle: string;
+}> = [
+  {
+    level: "still_confused",
+    label: "Still confused",
+    profileConfidence: "building",
+    practiceStyle: "Easier version",
+  },
+  {
+    level: "getting_it",
+    label: "Getting it",
+    profileConfidence: "steady",
+    practiceStyle: "Similar problem",
+  },
+  {
+    level: "confident",
+    label: "Confident",
+    profileConfidence: "confident",
+    practiceStyle: "Harder Version",
+  },
 ];
 
 const hintOptions: Array<{
@@ -649,6 +687,100 @@ function uniqueLimited(items: string[], limit: number) {
   return Array.from(new Set(items.filter(Boolean))).slice(0, limit);
 }
 
+function buildPracticeQueue({
+  recommendation,
+  learningProfile,
+  detectedFocus,
+  practiceState,
+  hasLearningContext,
+}: {
+  recommendation: LearningRecommendation | null;
+  learningProfile: LearningProfile;
+  detectedFocus: ReturnType<typeof detectFocus>;
+  practiceState: "starter" | "checkpoint" | "active";
+  hasLearningContext: boolean;
+}): PracticeQueueItem[] {
+  const queue: PracticeQueueItem[] = [];
+  const fallbackTopic =
+    detectedFocus.subject === "Waiting for a problem"
+      ? "Algebra"
+      : detectedFocus.subject;
+
+  if (recommendation) {
+    queue.push({
+      id: "recommended",
+      title:
+        practiceState === "checkpoint"
+          ? recommendation.title
+          : "Practice after this step",
+      description: recommendation.description,
+      topic: recommendation.topic,
+      difficulty: recommendation.difficulty,
+      style: recommendation.style,
+      skills: recommendation.skills,
+    });
+  }
+
+  const reviewSkill =
+    learningProfile.spacedReviewQueue[0] ||
+    learningProfile.conceptsNeedingReinforcement[0] ||
+    learningProfile.formulaConfusions[0] ||
+    learningProfile.setupMistakes[0];
+
+  if (reviewSkill) {
+    queue.push({
+      id: "review",
+      title: `Quick review: ${reviewSkill}`,
+      description: "A short refresh can keep this skill from getting rusty.",
+      topic: learningProfile.currentSubject || fallbackTopic,
+      difficulty: "Beginner",
+      style: "Concept review",
+      skills: uniqueLimited([reviewSkill, ...detectedFocus.skills], 3),
+    });
+  }
+
+  if (hasLearningContext && detectedFocus.skills[0]) {
+    queue.push({
+      id: "current-skill",
+      title: `One more ${detectedFocus.skills[0].toLowerCase()} problem`,
+      description: "Use the same idea once more while it is fresh.",
+      topic: fallbackTopic,
+      difficulty:
+        learningProfile.confidenceLevel === "confident"
+          ? "Advanced"
+          : "Intermediate",
+      style:
+        learningProfile.confidenceLevel === "building"
+          ? "Practice with hints"
+          : "Similar Problems",
+      skills: detectedFocus.skills.slice(0, 3),
+    });
+  }
+
+  if (!queue.length) {
+    queue.push({
+      id: "starter",
+      title: "Choose a practice topic",
+      description: "Start with a topic and StepWise will build a guided prompt.",
+      topic: "Algebra",
+      difficulty: "Intermediate",
+      style: "Guided step-by-step tutoring",
+      skills: ["Problem setup", "Step-by-step reasoning"],
+    });
+  }
+
+  const seen = new Set<string>();
+
+  return queue
+    .filter((item) => {
+      const key = `${item.title}-${item.topic}-${item.skills.join(",")}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 3);
+}
+
 function normalizeCropRegion(crop: CropRegion) {
   return {
     x: Math.round(clampPercent(crop.x)),
@@ -729,6 +861,8 @@ export default function DemoPage() {
   const [practiceGoal, setPracticeGoal] = useState("");
   const [selectedPracticeFocus, setSelectedPracticeFocus] = useState("");
   const [practiceContext, setPracticeContext] = useState("");
+  const [confidenceCheckIn, setConfidenceCheckIn] =
+    useState<ConfidenceLevel | null>(null);
 
   useEffect(() => {
     setLearningProfile(loadLearningProfile());
@@ -1058,6 +1192,20 @@ export default function DemoPage() {
       : practiceState === "checkpoint"
         ? "StepWise can now use your tutoring progress to suggest focused practice."
         : "Stay with this problem first. StepWise can support the next step without jumping ahead.";
+  const practiceQueue = buildPracticeQueue({
+    recommendation: learningRecommendation,
+    learningProfile,
+    detectedFocus,
+    practiceState,
+    hasLearningContext,
+  });
+  const showConfidenceCheckIn = Boolean(
+    hasActiveSession &&
+      hasLearningContext &&
+      reachedLearningCheckpoint &&
+      !activeConfusionSignal &&
+      !isThinking
+  );
 
   useEffect(() => {
     if (!learningRecommendation) return;
@@ -1323,6 +1471,7 @@ export default function DemoPage() {
       setActiveWorksheetContext(getStoredWorksheetContext(data.session));
       setConfirmedUploadProblem(Boolean(restoredProblem));
       setShowUploadConfirmation(false);
+      setConfidenceCheckIn(null);
       setMessages(
         loadedMessages.length
           ? loadedMessages
@@ -1372,6 +1521,7 @@ export default function DemoPage() {
     setShowUploadConfirmation(false);
     setHintMenuOpen(false);
     setPracticePickerOpen(false);
+    setConfidenceCheckIn(null);
     setMessages([
       {
         id: 1,
@@ -2047,7 +2197,7 @@ export default function DemoPage() {
         setHomeworkAnalysis(data);
         setSelectedHomeworkProblemId(data.problems?.[0]?.id ?? "");
         setEditedExtractedProblem(data.problems?.[0]?.extractedText ?? "");
-        setShowUploadConfirmation(false);
+        setShowUploadConfirmation(true);
         syncInteractionUsage(data);
       }
     } catch (error) {
@@ -2091,6 +2241,7 @@ export default function DemoPage() {
       setSelectedHomeworkProblemId(data.problems?.[0]?.id ?? "");
       setEditedExtractedProblem(data.problems?.[0]?.extractedText ?? "");
       setCropModeOpen(false);
+      setShowUploadConfirmation(true);
       addMessage(
         "assistant",
         data.message ||
@@ -2133,6 +2284,7 @@ export default function DemoPage() {
     );
     setConfirmedUploadProblem(true);
     setHomeworkAnalysis(null);
+    setShowUploadConfirmation(false);
     addMessage("user", `I want help with this problem: ${confirmedProblem}`);
     void requestTutorHelp(
       "general",
@@ -2730,6 +2882,76 @@ export default function DemoPage() {
     });
   }
 
+  function handleConfidenceCheckIn(level: ConfidenceLevel) {
+    const selectedOption = confidenceOptions.find(
+      (option) => option.level === level
+    );
+    const confidenceLabel = selectedOption?.label ?? "Getting it";
+    const profileConfidence = selectedOption?.profileConfidence ?? "steady";
+    const topic =
+      detectedFocus.subject === "Waiting for a problem"
+        ? learningProfile.currentSubject
+        : detectedFocus.subject;
+
+    setConfidenceCheckIn(level);
+    setLearningProfile((currentProfile) => ({
+      ...currentProfile,
+      confidenceLevel: profileConfidence,
+      confidenceByTopic: {
+        ...currentProfile.confidenceByTopic,
+        [topic]: confidenceLabel,
+      },
+      lastReflection:
+        level === "still_confused"
+          ? "This skill is worth another slower pass."
+          : level === "confident"
+            ? "You are ready for a little more independence on this skill."
+            : "You are building steadier confidence with this skill.",
+      lastUpdated: new Date().toISOString(),
+    }));
+  }
+
+  function handleQueuedPractice(item: PracticeQueueItem) {
+    if (isThinking || !canUseDemo()) return;
+
+    setSelectedPracticeTopic(
+      practiceTopics.includes(item.topic) ? item.topic : "Algebra"
+    );
+    setSelectedPracticeDifficulty(item.difficulty);
+    setSelectedPracticeStyle(
+      checkpointPracticeStyles.includes(item.style)
+        ? item.style
+        : starterPracticeStyles.includes(item.style)
+          ? item.style
+          : "Similar Problems"
+    );
+    setPracticeContext(
+      `${item.topic} ${item.difficulty} ${item.style} ${item.skills.join(" ")}`
+    );
+
+    const message = [
+      "Structured app action: practice_queue.",
+      `Queue item: ${item.title}.`,
+      `Topic: ${item.topic}.`,
+      `Difficulty: ${item.difficulty}.`,
+      `Practice style: ${item.style}.`,
+      `Skills: ${item.skills.join(", ")}.`,
+      confidenceCheckIn
+        ? `Student confidence check-in: ${confidenceCheckIn.replace("_", " ")}.`
+        : "",
+      "Generate one targeted practice problem. Keep it short and ask one first-step question.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    addMessage("user", `Practice queue: ${item.title}`);
+    void requestTutorHelp("generate_practice", message, {
+      practiceTopic: item.topic,
+      practiceDifficulty: item.difficulty,
+      practiceType: item.style,
+    });
+  }
+
   function handleSendMessage() {
     const trimmedAttempt = attempt.trim();
 
@@ -2924,6 +3146,47 @@ export default function DemoPage() {
                   </p>
                 </div>
               )}
+            </div>
+          </div>
+
+          <div className="mt-8">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">
+                Practice Queue
+              </p>
+              <button
+                onClick={handleGenerateSimilarPractice}
+                disabled={isThinking || usageLimitReached}
+                className="text-xs font-semibold text-cyan-700 hover:text-cyan-800 disabled:text-slate-400"
+              >
+                Edit
+              </button>
+            </div>
+
+            <div className="mt-3 space-y-2 rounded-3xl bg-slate-50 p-3 text-sm">
+              {practiceQueue.map((item, index) => (
+                <button
+                  key={item.id}
+                  onClick={() => handleQueuedPractice(item)}
+                  disabled={isThinking || usageLimitReached}
+                  className="w-full rounded-2xl bg-white px-3 py-3 text-left shadow-sm transition hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold uppercase text-slate-400">
+                      {index === 0 ? "Next" : "Later"}
+                    </span>
+                    <span className="rounded-full bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                      {item.difficulty}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs font-semibold leading-5 text-slate-800">
+                    {item.title}
+                  </p>
+                  <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-slate-500">
+                    {item.description}
+                  </p>
+                </button>
+              ))}
             </div>
           </div>
 
@@ -3154,6 +3417,37 @@ export default function DemoPage() {
                     </div>
                   )}
 
+                  {showConfidenceCheckIn && (
+                    <div className="mx-auto max-w-2xl rounded-2xl bg-white/85 px-4 py-3 text-sm shadow-sm ring-1 ring-slate-200">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="font-semibold text-slate-900">
+                            How confident do you feel with this?
+                          </p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">
+                            Your answer tunes the practice queue.
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5">
+                          {confidenceOptions.map((option) => (
+                            <button
+                              key={option.level}
+                              onClick={() => handleConfidenceCheckIn(option.level)}
+                              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                                confidenceCheckIn === option.level
+                                  ? "bg-slate-950 text-white"
+                                  : "bg-slate-50 text-slate-600 hover:bg-cyan-50 hover:text-cyan-800"
+                              }`}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {!hasActiveSession && (
                     <div className="mx-auto max-w-2xl rounded-[1.5rem] bg-slate-50 px-5 py-3">
                       <p className="text-sm font-semibold text-slate-700">
@@ -3357,6 +3651,18 @@ export default function DemoPage() {
                   edit the text if needed, then confirm so the tutor does not
                   solve the wrong question.
                 </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-800">
+                    {homeworkAnalysis?.problems?.length
+                      ? `${homeworkAnalysis.problems.length} problem${
+                          homeworkAnalysis.problems.length === 1 ? "" : "s"
+                        } detected`
+                      : "No clean problem split yet"}
+                  </span>
+                  <span className="rounded-full bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                    Crop or edit before tutoring starts
+                  </span>
+                </div>
               </div>
 
               <button
@@ -3408,6 +3714,21 @@ export default function DemoPage() {
                       specific page or paste the problem text.
                     </div>
                   )}
+                </div>
+
+                <div className="grid gap-2 text-xs sm:grid-cols-3 lg:grid-cols-1">
+                  {[
+                    "Pick the exact problem card.",
+                    "Edit any math that looks off.",
+                    "Use crop if the page is crowded.",
+                  ].map((tip) => (
+                    <div
+                      key={tip}
+                      className="rounded-2xl bg-white px-3 py-2 leading-5 text-slate-500 ring-1 ring-slate-200"
+                    >
+                      {tip}
+                    </div>
+                  ))}
                 </div>
 
                 <div className="rounded-[1.5rem] bg-slate-50 p-4 text-sm ring-1 ring-slate-200">
