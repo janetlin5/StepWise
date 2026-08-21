@@ -4,7 +4,8 @@
   "name": "stepwise-tutor-dashboard",
   "compatibility_date": "2026-08-21",
   "compatibility_flags": [
-    "nodejs_compat",
+    "nodejs_compat_v2",
+    "nodejs_compat_populate_process_env",
     "global_fetch_strictly_public"
   ],
   "assets": {
