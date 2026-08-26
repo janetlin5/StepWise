@@ -25,6 +25,14 @@ type ActiveLearningSession = {
   updated_at: string;
 };
 
+type ReviewItem = {
+  id: string;
+  label: string;
+  title: string;
+  description: string;
+  prompt: string;
+};
+
 export default function DashboardPage() {
   const [learningProfile, setLearningProfile] = useState<LearningProfile>(
     createDefaultLearningProfile
@@ -120,6 +128,7 @@ export default function DashboardPage() {
     learningProfile,
     personalizationPhase
   );
+  const reviewPlan = buildReviewPlan(learningProfile, personalizationPhase);
   const strengths = buildStrengths(learningProfile, personalizationPhase);
   const visibleStrengths = strengths.slice(0, 2);
   const recentLearningItems = learningProfile.problemHistory.slice(0, 2);
@@ -231,6 +240,53 @@ export default function DashboardPage() {
             </div>
           </Link>
         </div>
+
+        <section className="mt-5 rounded-[2rem] bg-white p-5 shadow-sm shadow-slate-200/60 sm:p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase text-cyan-700">
+                Review today
+              </p>
+              <h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-950">
+                Keep yesterday&apos;s learning warm.
+              </h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+                A short review is enough. Pick one card and StepWise will turn it
+                into a guided refresh.
+              </p>
+            </div>
+
+            <Link
+              href="/demo"
+              className="w-fit rounded-full bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white shadow-sm shadow-slate-200 transition hover:-translate-y-0.5 hover:bg-slate-800"
+            >
+              Open Tutor
+            </Link>
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {reviewPlan.map((item) => (
+              <Link
+                key={item.id}
+                href={`/demo?reviewPrompt=${encodeURIComponent(item.prompt)}`}
+                className="group flex min-h-44 flex-col rounded-[1.35rem] bg-slate-50 p-4 transition hover:-translate-y-0.5 hover:bg-cyan-50/70 hover:shadow-md hover:shadow-slate-200/70"
+              >
+                <span className="w-fit rounded-full bg-white px-3 py-1 text-[11px] font-semibold uppercase text-slate-500 shadow-sm group-hover:text-cyan-800">
+                  {item.label}
+                </span>
+                <h3 className="mt-3 text-base font-bold leading-6 text-slate-950">
+                  {item.title}
+                </h3>
+                <p className="mt-2 flex-1 text-sm leading-6 text-slate-500">
+                  {item.description}
+                </p>
+                <span className="mt-4 text-xs font-semibold text-cyan-700">
+                  Start guided review
+                </span>
+              </Link>
+            ))}
+          </div>
+        </section>
 
         <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_0.72fr]">
           <Link
@@ -372,6 +428,107 @@ function LearningMetric({ label, value }: { label: string; value: string }) {
       </p>
     </div>
   );
+}
+
+function buildReviewPlan(
+  profile: LearningProfile,
+  phase: "new" | "early" | "established"
+): ReviewItem[] {
+  const recentProblem = profile.problemHistory[0];
+  const reviewSkill =
+    profile.spacedReviewQueue[0] ||
+    profile.conceptsNeedingReinforcement[0] ||
+    profile.formulaConfusions[0] ||
+    profile.setupMistakes[0] ||
+    recentProblem?.subtopic ||
+    profile.recentConcepts[0];
+  const mistakeToCheck =
+    profile.recurringMistakes[0] ||
+    recentProblem?.mistakesMade[0] ||
+    profile.setupMistakes[0] ||
+    profile.conceptualMisunderstandings[0];
+  const keyIdea =
+    profile.strongSkills[0] ||
+    profile.skillMastery.find(
+      (skill) => skill.level === "steady" || skill.level === "strong"
+    )?.skill ||
+    recentProblem?.problemType ||
+    profile.recentConcepts[0];
+  const subject =
+    recentProblem?.topic ||
+    profile.subjectsStudied[0] ||
+    (profile.currentSubject === "Waiting for a problem"
+      ? "math"
+      : profile.currentSubject);
+
+  if (phase === "new") {
+    return [
+      {
+        id: "first-problem",
+        label: "Start",
+        title: "Bring one real homework problem",
+        description:
+          "Paste a question or upload a screenshot so your review plan can become personal.",
+        prompt:
+          "I want to start a review habit. Help me work through one homework problem step by step.",
+      },
+      {
+        id: "setup",
+        label: "Skill",
+        title: "Practice problem setup",
+        description:
+          "Start with the habit that helps most homework feel less overwhelming.",
+        prompt:
+          "Give me a short guided practice problem focused on setting up the first step.",
+      },
+      {
+        id: "confidence",
+        label: "Check-in",
+        title: "Find what feels confusing",
+        description:
+          "Use one quick question to figure out where support would help most.",
+        prompt:
+          "Ask me one question to figure out what kind of math practice I should do today.",
+      },
+    ];
+  }
+
+  return [
+    {
+      id: "key-idea",
+      label: "Key idea",
+      title: keyIdea ? `Refresh ${keyIdea.toLowerCase()}` : `Review ${subject}`,
+      description:
+        "Revisit the main idea from recent tutoring before starting anything new.",
+      prompt: `Give me a short guided review for ${keyIdea || subject}. Start with one quick setup question, not a full explanation.`,
+    },
+    {
+      id: "mistake-check",
+      label: "Watch for",
+      title: mistakeToCheck
+        ? `Check ${mistakeToCheck.toLowerCase()}`
+        : "Check the step that usually slips",
+      description:
+        "Slow down around one likely mistake so it is easier to catch next time.",
+      prompt: `Give me one short practice check for ${
+        mistakeToCheck || "common setup or sign mistakes"
+      }. Ask me to identify the issue before showing the fix.`,
+    },
+    {
+      id: "one-more",
+      label: "Practice",
+      title: reviewSkill
+        ? `Try one more ${reviewSkill.toLowerCase()} problem`
+        : "Try one focused review problem",
+      description:
+        "Use a nearby problem to turn today’s review into something that sticks.",
+      prompt: `Generate one ${
+        phase === "established" ? "adaptive" : "guided"
+      } practice problem for ${
+        reviewSkill || subject
+      }. Keep it short and ask one first-step question.`,
+    },
+  ];
 }
 
 function buildRecommendation(

@@ -869,6 +869,17 @@ export default function DemoPage() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const reviewPrompt = params.get("reviewPrompt")?.trim();
+
+    if (reviewPrompt) {
+      setAttempt(reviewPrompt);
+    }
+  }, []);
+
+  useEffect(() => {
     saveLearningProfile(learningProfile);
 
     if (!currentUserId || !profileSyncReady) return;
