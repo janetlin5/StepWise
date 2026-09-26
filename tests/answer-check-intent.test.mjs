@@ -8,6 +8,12 @@ const compiled = ts.transpileModule(fs.readFileSync('src/lib/answerCheckIntent.t
 const mod = { exports: {} };
 new Function('exports', compiled)(mod.exports);
 const { hasAnswerCheckIntent, hasProposedNumericAnswer } = mod.exports;
+const coordinateJs = ts.transpileModule(fs.readFileSync('src/lib/coordinateGrading.ts', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+}).outputText;
+const coordinates = {};
+new Function('exports', coordinateJs)(coordinates);
+
 
 test('short numeric verification questions include both intent and a submitted answer', () => {
   for (const text of ['Is the vertex (0, -2)?', 'Is the slope -6?', 'Is the radius of the circle 5?', 'Is the focus (2, −0.5)?', 'Is the directrix y = -2?', 'Is the probability .5?', String.raw`Is the vertex \(0, -2\)?`]) {
@@ -24,7 +30,7 @@ test('problem references and questions without an answer do not become numeric a
 });
 
 test('existing answer-check phrases remain supported', () => {
-  for (const text of ['Check my answer', 'I got x = 3', 'Is this right?', 'Can you verify my work?', 'My answer is 2']) {
+  for (const text of ['Check my answer', 'I got x = 3', 'Is this right?', 'Can you verify my work?', 'My answer is 2', '(2, −1)', '(2, 1)']) {
     assert.equal(hasAnswerCheckIntent(text), true, text);
   }
 });
@@ -38,7 +44,7 @@ test('client and tutor API accept short proposed answers through their attempt g
     const declaration = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
     assert.ok(declaration);
     const js = ts.transpileModule(declaration.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
-    const gate = new Function('hasProposedNumericAnswer', `${js}\nreturn ${name};`)(hasProposedNumericAnswer);
+    const gate = new Function('hasProposedNumericAnswer', 'isCoordinateCheck', `${js}\nreturn ${name};`)(hasProposedNumericAnswer, coordinates.isCoordinateCheck);
     assert.equal(gate('Is the vertex (0, -2)?'), true, file);
     assert.equal(gate('Is the slope -6?'), true, file);
     assert.equal(gate('Check my answer'), false, file);

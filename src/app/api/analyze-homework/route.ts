@@ -1,3 +1,4 @@
+import { evaluateCoordinateAnswer, isCoordinateCheck, coordinateTarget, ambiguousCoordinate } from "@/lib/coordinateGrading";
 import { hasAnswerCheckIntent } from "@/lib/answerCheckIntent";
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
@@ -231,6 +232,8 @@ export async function POST(request: Request) {
     const conversationHistory = body.conversationHistory ?? [];
     const sessionId = body.sessionId?.trim() || crypto.randomUUID();
     const answerCheckIntent = hasAnswerCheckIntent(targetPrompt);
+    const coordinateCheck = mode === "targeted_tutoring" && answerCheckIntent && isCoordinateCheck(targetPrompt);
+    const visionTargetPrompt = coordinateCheck ? coordinateTarget(targetPrompt) : targetPrompt;
     const accessToken = getBearerToken(request);
     const user = await getAuthenticatedUser(accessToken);
     const anonymousUsage = user ? null : checkAnonymousDemoUsage(request);
@@ -302,11 +305,13 @@ export async function POST(request: Request) {
         {
           role: "system",
           content:
-            mode === "targeted_tutoring"
+            coordinateCheck
+              ? `Extract ONLY the original printed problem identified by the reference. Ignore handwritten attempts, proposed answers, and answer keys. Do not solve or grade. Return JSON with currentProblem (complete original question including all diagram givens needed to solve it), confidence, needsUserSelection, message, and problems: []. Set needsUserSelection true and currentProblem empty if the target or any required givens are unclear. Do not substitute student work for the original question.`
+              : mode === "targeted_tutoring"
               ? targetedTutoringPrompt
               : imageAnalysisPrompt,
         },
-        ...conversationHistory.slice(-6).map((message) => ({
+        ...(coordinateCheck ? [] : conversationHistory).slice(-6).map((message) => ({
           role: message.role,
           content: message.content,
         })),
@@ -325,17 +330,17 @@ The first image is an enhanced copy optimized for reading. ${
 ${readingViewDataUrls.length ? `Additional close-up reading views are provided after the full-page image(s). Use these crops to read small worksheet text and target problem rows.` : ""}
 ${targetPrompt && readingViewDataUrls.length ? "For the student's requested problem, prioritize the first close-up reading view. If it contains multiple problem rows, extract only the row matching the requested problem number." : ""}
 ${cropRegion ? `Focus especially on this selected image region in percentages: ${JSON.stringify(cropRegion)}.` : ""}
-${targetPrompt ? `Student wants help with: ${targetPrompt}` : ""}
+${visionTargetPrompt ? `Requested problem: ${visionTargetPrompt}` : ""}
 Answer-checking intent: ${
-  answerCheckIntent
+  answerCheckIntent && !coordinateCheck
     ? "Yes. Evaluate the submitted answer first. Do not begin guided tutoring unless the answer is wrong/close and a targeted correction is needed."
     : "No explicit answer-checking intent."
 }
 
 Learning memory:
-${JSON.stringify(learningProfile ?? {}, null, 2)}
+${coordinateCheck ? "Not needed for extraction." : JSON.stringify(learningProfile ?? {}, null, 2)}
 
-${mode === "targeted_tutoring"
+${coordinateCheck ? "Extract the original problem only. Do not solve or evaluate answers." : mode === "targeted_tutoring"
   ? answerCheckIntent
     ? "Return only valid JSON. If the target problem and submitted answer are clear, give a concise correctness verdict first. Do not ask a guided question after a correct answer. If the target problem is unclear, ask for clarification."
     : "Return only valid JSON. If the target problem is clear, begin tutoring directly with one guided question. If it is not clear, ask for clarification."
@@ -379,9 +384,16 @@ ${mode === "targeted_tutoring"
       "";
     const analysis = parseHomeworkAnalysis(
       rawContent,
-      answerCheckIntent,
+      answerCheckIntent && !coordinateCheck,
       targetPrompt
     );
+    if (coordinateCheck) {
+      const evaluation = analysis.confidence >= 0.82 && !analysis.needsUserSelection && analysis.currentProblem
+        ? await evaluateCoordinateAnswer({ openai, problem: analysis.currentProblem, studentMessage: targetPrompt })
+        : null;
+      analysis.answerEvaluation = evaluation ?? ambiguousCoordinate("Please crop or paste the exact problem and one coordinate answer.");
+      analysis.message = buildAnswerEvaluationMessage(analysis.answerEvaluation, { includeExplanation: true });
+    }
 
     if (user) {
       await recordUsageEvent({

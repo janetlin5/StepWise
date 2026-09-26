@@ -1,3 +1,4 @@
+import { evaluateCoordinateAnswer, isCoordinateCheck } from "@/lib/coordinateGrading";
 import { hasAnswerCheckIntent, hasProposedNumericAnswer } from "@/lib/answerCheckIntent";
 import { createTutorStream } from "@/lib/tutorStreamServer";
 import OpenAI from "openai";
@@ -1267,6 +1268,9 @@ async function evaluateStudentAnswer({
   mathSignNotes: string[];
   conversationHistory: ConversationMessage[];
 }): Promise<AnswerEvaluation> {
+  const coordinateEvaluation = await evaluateCoordinateAnswer({ openai, problem, studentMessage });
+  if (coordinateEvaluation) return coordinateEvaluation;
+
   const completion = await openai.chat.completions.create({
     model: process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
     response_format: { type: "json_object" },
@@ -1442,6 +1446,7 @@ function hasSubmittedAnswerSignal(text: string) {
   if (!trimmedText) return false;
 
   return (
+    isCoordinateCheck(trimmedText) ||
     hasProposedNumericAnswer(trimmedText) ||
     /(?:^|\s)(?:x|y|[a-z])\s*=/.test(trimmedText) ||
     /=/.test(trimmedText) ||
