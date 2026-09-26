@@ -147,107 +147,55 @@ const hintInstructions: Record<HintLevel, string> = {
 };
 
 const systemPrompt = `
-You are StepWise, a supportive AI tutor. Your goal is to teach reasoning, confidence, and transferable problem-solving habits, not dump answers.
+You are StepWise, a supportive AI tutor. Teach reasoning, confidence, and transferable problem-solving habits \u2014 not answers.
 
-Core tutoring behavior:
-- StepWise is a focused academic tutor, not a general-purpose chatbot. Stay within homework, studying, academic subjects, test prep, writing, uploaded worksheets, and learning practice.
-- Keep most responses short: 2-4 sentences or a few compact bullets.
-- Early tutoring responses should be 30-50% shorter than a typical AI explanation.
-- Avoid textbook definitions, formal derivations, and abstract explanations unless the student asks for them.
-- Use natural spoken phrasing. If a sentence can lose 20-30% of its words without losing meaning, shorten it.
-- Trust the student with simple context. Do not overlabel obvious pieces.
-- Prefer "What's halfway between -2 and 1?" over "What do you get when you find the midpoint between y = -2 and y = 1 for the vertex's y-coordinate?"
-- Avoid phrases like "this will help us determine", "the next goal is to", "when you find", and "for the ___ coordinate" unless they are truly needed.
-- Reveal one important idea at a time. Do not stack multiple concepts before the student responds.
-- The student should usually participate within the first 1-3 tutor sentences.
-- Before asking a checkpoint question, give only the immediate context needed for that question.
-- A strong first response usually follows: quick acknowledgement, one immediate goal, one focused question.
-- Prefer one useful guiding question after the student understands why that question matters.
-- Micro-prompt rule: ask about one exact piece at a time. Make the expected action obvious.
-- Replace broad prompts like "What should we do next?", "How should we proceed?", "What would be the first step?", or "What would you plug in?" with concrete prompts like "What should we replace h with?" or "What does the left side become?"
-- Avoid open-ended planning questions unless the student is already confident and ready for independence.
-- As the session progresses, stop restating the whole problem. Trust the student remembers the context.
-- Contextual trust: after the problem has been identified, do not say "You want to find..." or restate all givens unless correcting confusion.
-- Skip obvious orientation that is already implied by the current formula/setup.
-- Remove transition filler. Prefer direct moves like "Use this form:", "The vertex is...", "What should h be?"
-- Each response should feel sharper and lighter as shared context builds.
-- Build small interaction loops: validate, nudge, ask the student to try the next step.
-- Avoid re-explaining the whole problem when the student only needs one correction.
-- Do not reveal a full solution unless the student has already completed the reasoning or explicitly asks for a full solution.
-- Teach why a move works when it helps, but keep the explanation brief.
-- Use natural micro-feedback when deserved: "Nice setup", "That step makes sense", "You're close", "Good catch".
-- Avoid exaggerated praise, grades, scores, or robotic analytics language.
-- Vary wording. Do not start every response the same way.
-- Do not immediately interrogate the student with questions like "What should we do first?" unless they already have context.
-- Do not test memory before building momentum. Avoid early "Do you know the formula?" or "What is the general form?" questions.
-- Before asking anything abstract, provide enough concrete structure for the student to act.
-- Prefer guided application over recall. For example, give the relevant equation structure when useful, then ask the student to plug in one value.
-- Formula scaffolding:
-  - If the student seems confident or advanced, you may lightly prompt one small recall piece, such as "which variable gets squared?"
-  - If confidence is unclear, the student hesitates, or it is early in the session, provide the formula/structure first, then ask them to apply one piece.
-  - If the student says they forgot, are confused, or asks which formula to use, calmly give the formula and immediately help them plug in the known values.
-  - Never shame forgetting. Formulas are tools, not gatekeeping.
-- Before asking a question, check: does this feel like tutoring or testing? If it feels like a memory quiz, scaffold more first.
-- Do not ask multiple questions at once.
-- Do not sound like a worksheet, quiz, or scripted classroom prompt.
-- Sound like a thoughtful tutor reasoning beside the student.
-- Optimize for momentum and confidence, not mathematical completeness.
-- Focus on "what should we notice first?" before introducing deeper theory.
-- Delay secondary concepts until they are needed. For example, in a focus/directrix parabola problem, find the halfway point before discussing opening direction, p-values, or standard form.
+Brevity and voice:
+- Stay within homework, studying, academic subjects, test prep, writing, worksheets, and learning practice.
+- Keep responses short: 2-4 sentences or a few compact bullets. Early responses should be 30-50% shorter than a typical AI explanation.
+- Use natural spoken phrasing; cut words that don't change meaning. Prefer "What's halfway between -2 and 1?" over formal restatements.
+- Avoid textbook definitions, formal derivations, and abstract explanations unless the student asks.
+- Skip transition filler ("this will help us determine", "the next goal is to"). Once context is established, don't restate the problem or givens unless correcting confusion.
+- Use LaTeX for math: inline \\( ... \\), display $$ ... $$.
 
-Student-led answer checking:
-- Students may submit full answers, full equations, shortcuts, or partial solutions at any time.
-- Verification phrases like "is this right?", "can you check my answer?", "I got...", "my answer is...", and completed equations mean answer checking comes before guided tutoring.
-- In answer-checking mode, do not start with "let's find..." or restart the problem from the beginning. Review the student's submitted work at the level they provided.
-- In answer-checking mode, never continue into a guided walkthrough after a correct answer. Give the verdict, one brief why, and optionally ask whether they want review or another problem.
-- Avoid answer-checking resets like "Let's start by finding the vertex", "First, what is...", or "What should we do first?" unless the submitted answer is missing or completely unsupported.
-- If the student asks to check an answer but has not included the answer, ask them to paste the answer or current work.
-- When the student provides a completed attempt, evaluate that attempt first instead of forcing the next guided step.
-- If the attempt appears correct: confirm briefly, optionally ask for reasoning, and offer a next action such as similar problem, harder version, less-guided practice, or finish session.
-- If the attempt is partially correct: explicitly name what is right, isolate the first weak step, and guide only that step.
-- If the attempt is incorrect: do not just say "wrong." Name the likely misconception gently and shift into step-by-step support for that exact issue.
-- If the student sounds confident, reduce scaffolding, avoid overexplaining, and ask fewer questions.
-- If the student sounds confused, increase scaffolding and offer smaller hints.
-- The student can lead. Do not make the flow rigid.
+One idea at a time:
+- Reveal one important idea per response; never stack concepts before the student responds.
+- The student should participate within the first 1-3 sentences: quick acknowledgement, one immediate goal, one focused question.
+- Ask about one exact piece at a time with an obvious expected action. Replace broad prompts ("What should we do first?") with concrete ones ("What should we replace h with?").
+- Never ask multiple questions at once. Don't quiz memory early ("Do you know the formula?") \u2014 give the structure first, then ask the student to apply one piece.
+- Formula scaffolding: if the student seems confident, lightly prompt one recall piece; if unsure or early, give the formula then ask them to plug in one value; if they forgot or are confused, give the formula calmly and help plug in values. Never shame forgetting.
+- As shared context builds, each response should feel sharper and lighter. Don't re-explain the whole problem to fix one step.
 
-Adaptive tutoring modes:
-- Decide whether the student is correct, partially correct, confused, or repeatedly struggling.
-- If correct: reinforce the reasoning and ask the next logical step.
-- If partially correct: acknowledge the useful idea, then gently redirect the exact issue.
-- If confused: slow down, reduce cognitive load, and ask about one visible piece of the problem.
-- If repeatedly struggling: add scaffolding, use a smaller hint, or offer a brief similar example.
-- If the student seems stuck or overwhelmed, lower cognitive load: use simpler language, give a tiny first step, and ask an easier follow-up question.
-- If the student is close, do not restart the explanation. Point to the likely issue or next operation only.
-- If the student seems confident or advanced, be more concise and invite independent reasoning or a slightly harder check.
-- If the student asks "I don't get this", first clarify which part is unclear if needed. Do not launch into a full textbook explanation.
-- If checking work, confirm the correct part first when possible, then name only the first thing to revisit.
-- Mistake detection should be specific and observant. Look for sign errors, distribution mistakes, unlike-term combining, arithmetic slips, incorrect setup, or order-of-operations issues.
-- Math sign accuracy is critical. Preserve unary minus signs exactly. In expressions like \(= -6(y+0.5)\), the coefficient is negative six, not positive six.
-- If the student's raw answer and normalized math note mention an explicit negative coefficient, do not mark it as a positive-sign error.
-- When a likely mistake appears, name the problematic step gently and explain why it may have happened.
-- If helpful, quote or restate the student's problematic step briefly, but do not shame them.
-- Incremental reveal rule: reveal at most one new step per response unless the student has repeatedly insisted on the answer.
-- If the student asks directly for the answer, first offer a next-step reveal. After repeated direct requests, give more direct help while still explaining the reasoning.
-- If generating practice, create a related problem without solving it immediately.
-- If generating practice with no current problem, behave like a tutor starting a session. Use the student's stated topic/goal, difficulty, and support style. If the goal is vague, ask one clarifying question instead of generating random problems. Do not call it "similar" or imply personalization.
-- If generating practice during active tutoring, keep it brief and supportive. Do not distract from solving the current problem.
-- If generating practice after a checkpoint, make it adaptive to the current problem, detected topic, mistakes, confidence, and requested practice type.
-- During active problem solving, do not suggest "recommended next" topics, harder versions, or another problem. Keep the student focused on the current problem until they show completion or understanding.
-- If the student asks for more practice before finishing the current problem, acknowledge it briefly and redirect: help them complete the current step first.
-- If practice style/type is "Mixed format", include both a standard problem and a word problem that practice the same skill.
-- If the student asks for recommended practice, choose a problem that reinforces the skill they appear to need next. Keep the tone encouraging, not evaluative.
-- Use the learning profile as gentle context. Reference memory at most once, only when it directly helps the current problem. Never say "detected weakness" or sound like an analytics report.
-- Use retrieved learning memories as hidden guidance for pacing, hint size, and mistake awareness. Do not dump memory back to the student.
-- Soft adaptation should feel natural: shorter hints for concise learners, more scaffolding after repeated confusion, more independence after prior success, and small targeted reminders around relevant mistake patterns.
-- Never say "you always struggle with this", "your history shows", "the data says", or similar tracking language.
-- If there is not enough persistent memory, do not pretend to know the student's long-term patterns.
-- Personalized practice rule: use prior problem patterns, spaced review needs, hint dependency, recurring mistakes, and confidence signals to choose practice. Do not generate random practice if useful memory exists.
-- Problem-template rule: when prior problem metadata is available, reuse the structure with changed numbers, orientation, context, or difficulty so the student transfers reasoning instead of memorizing.
-- Spaced review rule: if an older skill appears in the spaced review queue, you may naturally offer a short refresh. Phrase it like a tutor: "This is a good quick refresh," not like tracking software.
-- Adaptive reflection rule: after completion, include at most one gentle observation about progress when helpful. Keep it specific and encouraging, never clinical.
-- Memory privacy rule: never say "I recorded", "I tracked", "you failed", or "weakness detected." Use natural language like "Last time this type of setup was tricky."
-- Use LaTeX for mathematical expressions. Use inline math with \\( ... \\) and display math with $$ ... $$ when helpful.
-- Format exponents, equations, fractions, derivatives, integrals, and statistical notation as LaTeX.
+Momentum:
+- Build small loops: validate, nudge, ask the student to try the next step.
+- If stuck or confused: slow down, simplify, give a tiny first step, ask one easier question. If they say "I don't get this", ask which part is unclear before explaining.
+- If close: don't restart \u2014 point at the likely issue or next operation only.
+- If confident or advanced: be concise, reduce scaffolding, invite independent reasoning.
+- If repeatedly struggling: name the misconception gently and use a smaller subproblem. Don't repeat the same explanation.
+- Incremental reveal: at most one new step per response. Don't give the full solution unless the student completed the reasoning or explicitly asks (after repeated direct requests, give more direct help with reasoning explained).
+- Natural micro-feedback when deserved ("Nice setup", "Good catch"). No exaggerated praise, grades, or analytics language. Vary your openings.
+
+Answer checking (student-led):
+- "Is this right?", "I got...", completed equations, or submitted work mean: evaluate their attempt FIRST, before any guided tutoring. Don't restart the problem from the beginning.
+- Correct: confirm briefly, one short why, then stop \u2014 optionally offer review or another problem. Never follow a correct answer with a guided question.
+- Partially correct: name what's right, isolate the first weak step, guide only that step.
+- Incorrect: don't just say "wrong" \u2014 name the likely misconception gently and support that exact step.
+- If they ask to check but included no answer or work, ask them to paste it.
+- The student can lead; don't make the flow rigid.
+
+Practice:
+- When generating practice: one targeted problem, a short skill note, one first-step question. Don't solve it. If no topic is clear, ask one clarifying question instead of guessing.
+- For "Mixed format", include a standard problem and a word problem practicing the same skill.
+- Reuse prior problem structures with changed numbers or context so reasoning transfers; a spaced-review skill may get a brief natural refresh ("good quick refresh"). If they ask for a recommendation, pick the skill they seem to need next.
+- During active solving, don't suggest new topics or harder versions until the current problem shows completion or understanding. If they ask for practice mid-problem, briefly redirect to finish the current step first.
+- After completion, at most one gentle, specific observation about progress.
+
+Mistakes:
+- Watch for sign errors, distribution mistakes, combining unlike terms, arithmetic slips, setup errors, order of operations. Preserve minus signs exactly ("= -6(y+0.5)" is negative six).
+
+Memory (hidden):
+- If memory is insufficient, don't imply knowledge of long-term learning patterns.
+- Use learning-profile memory only for pacing, hint size, and mistake awareness \u2014 at most one subtle reference, only when it directly helps the current step.
+- Never use tracking language ("you always struggle", "your history shows", "I recorded"). Prefer "Last time this type of setup was tricky."
 `;
 
 function getAdaptiveGuidance({
@@ -520,10 +468,6 @@ export async function POST(request: Request) {
       ),
     });
     const mode = routedIntent.effectiveMode;
-    const worksheetContextSummary = formatWorksheetContext(
-      worksheetContext,
-      referencedWorksheetProblem
-    );
     const problem =
       referencedWorksheetProblem?.extractedText ||
       body.currentProblem?.trim() ||
@@ -531,10 +475,17 @@ export async function POST(request: Request) {
       worksheetContext?.currentProblem?.trim() ||
       worksheetContext?.problems?.[0]?.extractedText?.trim() ||
       "No problem provided yet.";
+    const worksheetContextSummary = formatWorksheetContext(
+      worksheetContext,
+      referencedWorksheetProblem,
+      problem
+    );
 
     if (user) {
-      try {
-        const session = await ensureLearningSession({
+      // Session setup and memory retrieval are independent; run them concurrently
+      // instead of paying for two sequential round trips before the LLM call.
+      const [sessionOutcome, memoryOutcome] = await Promise.all([
+        ensureLearningSession({
           userId: user.id,
           accessToken,
           sessionId: activeSessionId,
@@ -543,24 +494,36 @@ export async function POST(request: Request) {
           mode,
           profile: learningProfile,
           conversationHistory,
-        });
-        activeSessionId = session.sessionId;
-      } catch (error) {
-        console.error("Learning session start error:", error);
-      }
-
-      try {
-        const retrievedMemory = await retrieveLearningMemory({
+        }).then(
+          (session) => ({ ok: true as const, sessionId: session.sessionId }),
+          (error: unknown) => {
+            console.error("Learning session start error:", error);
+            return { ok: false as const };
+          }
+        ),
+        retrieveLearningMemory({
           userId: user.id,
           accessToken,
           currentProblem: problem,
           studentMessage,
           clientProfile: learningProfile,
-        });
-        learningProfile = retrievedMemory.profile;
-        persistentMemorySummary = retrievedMemory.promptSummary;
-      } catch (error) {
-        console.error("Learning memory retrieval error:", error);
+        }).then(
+          (retrievedMemory) => ({ ok: true as const, retrievedMemory }),
+          (error: unknown) => {
+            console.error("Learning memory retrieval error:", error);
+            return { ok: false as const };
+          }
+        ),
+      ]);
+
+      if (sessionOutcome.ok) {
+        activeSessionId = sessionOutcome.sessionId;
+      }
+
+      if (memoryOutcome.ok) {
+        learningProfile = memoryOutcome.retrievedMemory.profile;
+        persistentMemorySummary = memoryOutcome.retrievedMemory.promptSummary;
+      } else {
         persistentMemorySummary =
           "No reliable persistent memory available. Tutor normally using the current conversation only.";
       }
@@ -575,26 +538,24 @@ export async function POST(request: Request) {
     const answerCheckIntent =
       routedIntent.mode === "answer_check";
     const submittedAnswerSignal = hasSubmittedAnswerSignal(studentMessage);
-    const normalizedStudentMath = normalizeStudentMathInput(studentMessage);
-    const mathSignNotes = getMathSignNotes(studentMessage);
     const hintEscalationLevel = deriveHintEscalationLevel(tutoringSignals);
     const mistakePatterns = detectMistakePatterns(
       `${problem}\n${studentMessage}`
     );
     const learningMemorySummary = summarizeLearningMemory(learningProfile);
     const recentProblemMemories =
-      learningProfile.problemHistory?.slice(0, 3).map((problemMemory) => ({
+      learningProfile.problemHistory?.slice(0, 2).map((problemMemory) => ({
         topic: problemMemory.topic,
         subtopic: problemMemory.subtopic,
-        problemType: problemMemory.problemType,
+        type: problemMemory.problemType,
         difficulty: problemMemory.difficulty,
-        source: problemMemory.source,
-        hintsUsed: problemMemory.hintsUsed,
-        mistakesMade: problemMemory.mistakesMade.slice(0, 3),
-        completionStatus: problemMemory.completionStatus,
-        solvedIndependently: problemMemory.solvedIndependently,
-        template: problemMemory.extractedText.slice(0, 220),
+        hints: problemMemory.hintsUsed,
+        mistakes: problemMemory.mistakesMade.slice(0, 3),
+        completed: problemMemory.completionStatus,
+        independent: problemMemory.solvedIndependently,
+        example: problemMemory.extractedText.slice(0, 120),
       })) ?? [];
+    const compactSignals = compactTutoringSignals(tutoringSignals);
     const adaptiveGuidance = getAdaptiveGuidance({
       mode,
       studentMessage,
@@ -613,6 +574,10 @@ export async function POST(request: Request) {
         message =
           "I can check it — paste your answer or current work, and I’ll give you a clear verdict first.";
       } else {
+        // Math normalization is only needed for the answer-evaluation call,
+        // so it stays out of the main tutoring prompt.
+        const normalizedStudentMath = normalizeStudentMathInput(studentMessage);
+        const mathSignNotes = getMathSignNotes(studentMessage);
         answerEvaluation = await evaluateStudentAnswer({
           openai,
           problem: [problem, worksheetContextSummary].filter(Boolean).join("\n\n"),
@@ -642,7 +607,7 @@ Do not announce the memory system. Do not over-reference past learning. If memor
           },
           ...conversationHistory.slice(-8).map((message) => ({
             role: message.role,
-            content: message.content,
+            content: truncateContextText(message.content),
           })),
           {
             role: "user",
@@ -666,7 +631,7 @@ Learning profile memory:
 ${learningMemorySummary}
 
 Recent problem memory for personalization:
-${recentProblemMemories.length ? JSON.stringify(recentProblemMemories, null, 2) : "No prior problem metadata yet."}
+${recentProblemMemories.length ? JSON.stringify(recentProblemMemories) : "No prior problem metadata yet."}
 
 Active worksheet context:
 ${worksheetContextSummary || "No uploaded worksheet context for this session."}
@@ -679,36 +644,21 @@ ${
 }
 
 Learning signals:
-${JSON.stringify(tutoringSignals, null, 2)}
-
-Answer-checking intent:
-${answerCheckIntent ? "Yes. Evaluate the student's answer/work first." : "No explicit answer-checking intent."}
+${Object.keys(compactSignals).length ? JSON.stringify(compactSignals) : "none"}
 
 Submitted answer/work signal:
 ${submittedAnswerSignal ? "The message appears to include an answer or completed attempt." : "No clear submitted answer detected."}
-
-Answer-checking response rule:
-${
-  answerCheckIntent
-    ? "If an answer is included, decide correct / partially correct / incorrect before asking any guided question. If correct, do not ask a guided question or restart the problem; give a concise verdict and optional offer. If no answer is included, ask the student to paste their answer or work. Do not restart the problem unless needed to diagnose the submitted work."
-    : "Tutor normally."
-}
 
 Problem:
 ${problem}
 
 Student message (raw):
 ${studentMessage}
-
-Student message (math-normalized for sign reading only):
-${normalizedStudentMath}
-
-Math sign notes:
-${mathSignNotes.length ? mathSignNotes.join("\n") : "No special sign handling needed."}
 `,
           },
         ],
         temperature: 0.55,
+        max_completion_tokens: 700,
       });
 
       message =
@@ -717,33 +667,41 @@ ${mathSignNotes.length ? mathSignNotes.join("\n") : "No special sign handling ne
     }
 
     if (user) {
-      await recordUsageEvent({
+      // These writes don't affect the response, so run them concurrently
+      // instead of sequentially before sending it back to the student.
+      const usageWrite = recordUsageEvent({
         userId: user.id,
         eventType,
         accessToken,
+      }).catch((error: unknown) => {
+        console.error("Usage event save error:", error);
       });
 
-      try {
-        await recordLearningMemoryEvent({
-          userId: user.id,
-          accessToken,
-          sessionId: activeSessionId,
-          profile: learningProfile,
-          mode,
-          problem,
-          studentMessage,
-          assistantMessage: message,
-          topic: learningProfile.currentSubject,
-          skills: learningProfile.recentConcepts?.slice(0, 5),
-          tutoringState,
-          mistakePatterns,
-          conversationHistory,
-        });
-      } catch (error) {
+      const memoryWrite = recordLearningMemoryEvent({
+        userId: user.id,
+        accessToken,
+        sessionId: activeSessionId,
+        profile: learningProfile,
+        mode,
+        problem,
+        studentMessage,
+        assistantMessage: message,
+        topic: learningProfile.currentSubject,
+        skills: learningProfile.recentConcepts?.slice(0, 5),
+        tutoringState,
+        mistakePatterns,
+        conversationHistory,
+      }).catch((error: unknown) => {
         console.error("Learning memory save error:", error);
-      }
+      });
 
-      if (activeSessionId) {
+      const conversationWrite = (async () => {
+        if (!activeSessionId) return;
+
+        // Both writes update session metadata. Save the thread after memory so
+        // the memory upsert cannot overwrite the conversation and worksheet.
+        await memoryWrite;
+
         try {
           const supabase = createSupabaseServerClient(accessToken);
           const now = new Date().toISOString();
@@ -841,7 +799,9 @@ ${mathSignNotes.length ? mathSignNotes.join("\n") : "No special sign handling ne
         } catch (error) {
           console.error("Conversation message save error:", error);
         }
-      }
+      })();
+
+      await Promise.allSettled([usageWrite, memoryWrite, conversationWrite]);
     }
 
     const responseBody = {
@@ -876,6 +836,27 @@ ${mathSignNotes.length ? mathSignNotes.join("\n") : "No special sign handling ne
 
 function normalizeForTopicGuard(text: string) {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// Bound per-message history size so one long LaTeX-heavy exchange can't blow
+// up the context window (and the bill) on every turn.
+function truncateContextText(text: string, maxChars = 1500) {
+  const trimmed = text.trim();
+  return trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}\u2026` : trimmed;
+}
+
+// Only send signals that are actually active; the full flag dump is mostly
+// undefined/false noise.
+function compactTutoringSignals(signals: TutoringSignals) {
+  const compact: Record<string, string | number | boolean> = {};
+
+  for (const [key, value] of Object.entries(signals ?? {})) {
+    if (value === undefined || value === null || value === false) continue;
+    if (typeof value === "number" && value === 0) continue;
+    compact[key] = value as string | number | boolean;
+  }
+
+  return compact;
 }
 
 function buildSavedThreadMessages(
@@ -1153,15 +1134,28 @@ function getProblemNumber(problem: WorksheetProblem) {
 
 function formatWorksheetContext(
   worksheetContext: WorksheetContext | null,
-  referencedProblem: WorksheetProblem | null
+  referencedProblem: WorksheetProblem | null,
+  activeProblemText?: string
 ) {
   if (!worksheetContext) return "";
 
   const problems = worksheetContext.problems ?? [];
+  const normalizedActive = (activeProblemText ?? "").trim().toLowerCase();
+  // Full problem text is only sent for the problems the student is actually
+  // working on. The rest are label-only so "problem 7" / "next" still resolve
+  // without paying for a dozen full problem texts every turn.
   const indexedProblems = problems
-    .slice(0, 12)
+    .slice(0, 20)
     .map((problem, index) => {
       const label = problem.label || `Problem ${index + 1}`;
+      const isPriority =
+        (referencedProblem != null && problem === referencedProblem) ||
+        index < 3 ||
+        (normalizedActive.length > 0 &&
+          problem.extractedText.trim().toLowerCase() === normalizedActive);
+
+      if (!isPriority) return `- ${label}`;
+
       const skills = problem.skills?.length
         ? ` Skills: ${problem.skills.slice(0, 3).join(", ")}.`
         : "";
@@ -1211,6 +1205,7 @@ async function evaluateStudentAnswer({
     model: process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
     response_format: { type: "json_object" },
     temperature: 0,
+    max_completion_tokens: 400,
     messages: [
       {
         role: "system",
@@ -1237,7 +1232,7 @@ Validation rules:
       },
       ...conversationHistory.slice(-6).map((message) => ({
         role: message.role,
-        content: message.content,
+        content: truncateContextText(message.content),
       })),
       {
         role: "user",
