@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { readTutorStream, TutorStreamError } from "@/lib/tutorStreamClient";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
@@ -808,7 +809,7 @@ export default function DemoPage() {
   const [learningProfile, setLearningProfile] = useState<LearningProfile>(
     createDefaultLearningProfile
   );
-  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+  const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID());
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploadedFileDataUrl, setUploadedFileDataUrl] = useState("");
   const [uploadedOriginalFileDataUrl, setUploadedOriginalFileDataUrl] =
@@ -832,6 +833,12 @@ export default function DemoPage() {
   const [isExtracting, setIsExtracting] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [isTutorRequestPending, setIsTutorRequestPending] = useState(false);
+  const tutorRequestLock = useRef(false);
+  const [isSavingTutorResponse, setIsSavingTutorResponse] = useState(false);
+  const [interruptedRequest, setInterruptedRequest] = useState<{
+    mode: HelpMode; studentMessage: string; options: PracticeOptions;
+  } | null>(null);
+  const [streamingMessageId, setStreamingMessageId] = useState<number | null>(null);
   const [thinkingLabel, setThinkingLabel] = useState(
     "Let's think through this together."
   );
@@ -1165,7 +1172,7 @@ export default function DemoPage() {
     completionSignal || demonstratedUnderstandingSignal;
   const suppressRecommendation =
     activeConfusionSignal ||
-    isThinking ||
+    isThinking || isTutorRequestPending ||
     lastTutorMode === "hint" ||
     (lastTutorMode === "check_work" &&
       !completionSignal &&
@@ -2569,7 +2576,7 @@ export default function DemoPage() {
     studentMessage: string,
     options: PracticeOptions = {}
   ) {
-    if (isThinking || isTutorRequestPending || !canUseDemo()) return;
+    if (tutorRequestLock.current || isThinking || isTutorRequestPending || !canUseDemo()) return;
 
     const referencedWorksheetProblem = resolveWorksheetProblemReference(
       studentMessage,
@@ -2600,7 +2607,11 @@ export default function DemoPage() {
       );
     }
 
+    tutorRequestLock.current = true;
+    setInterruptedRequest(null);
     setIsTutorRequestPending(true);
+    let streamedMessageId: number | null = null;
+    let accumulated = "";
     const thinkingTimer = showThinkingAfterDelay(getThinkingLabel(mode, options));
 
     try {
@@ -2665,6 +2676,41 @@ export default function DemoPage() {
         "I’m taking longer than usual to think through this problem. Try sending the message again in a moment."
       );
 
+      if (response.ok && response.headers.get("content-type")?.includes("text/event-stream")) {
+        const updateStreamedMessage = (content: string) => {
+          window.clearTimeout(thinkingTimer);
+          setIsThinking(false);
+          if (streamedMessageId === null) {
+            streamedMessageId = Date.now();
+            setStreamingMessageId(streamedMessageId);
+            setMessages((current) => [...current, { id: streamedMessageId!, role: "assistant", content }]);
+          } else {
+            const id = streamedMessageId;
+            setMessages((current) => current.map((message) => message.id === id ? { ...message, content } : message));
+          }
+        };
+        await readTutorStream(response, {
+          onMeta: (meta) => {
+            if (meta.sessionId) setSessionId(meta.sessionId);
+            syncInteractionUsage(meta);
+          },
+          onToken: (text) => {
+            accumulated += text;
+            updateStreamedMessage(accumulated);
+          },
+          onAnswerComplete: (text) => {
+            updateStreamedMessage(text);
+            setStreamingMessageId(null);
+            setIsSavingTutorResponse(isLoggedIn);
+            rememberLearningEvent(mode, studentMessage, undefined, text);
+            setLastTutorMode(mode);
+          },
+        });
+        if (isLoggedIn) void loadConversationHistory();
+        setHintMenuOpen(false);
+        return;
+      }
+
       const data = (await response.json()) as TutorHelpResponse;
 
       if (response.status === 403) {
@@ -2696,6 +2742,9 @@ export default function DemoPage() {
       }
       setHintMenuOpen(false);
     } catch (error) {
+      if (error instanceof TutorStreamError && !error.answerComplete) {
+        setInterruptedRequest({ mode, studentMessage, options });
+      }
       console.error(error);
       addMessage(
         "assistant",
@@ -2706,12 +2755,16 @@ export default function DemoPage() {
       );
     } finally {
       window.clearTimeout(thinkingTimer);
+      tutorRequestLock.current = false;
+      setIsSavingTutorResponse(false);
       setIsTutorRequestPending(false);
+      setStreamingMessageId(null);
       setIsThinking(false);
     }
   }
 
   function handleHint(level: HintLevel = "tiny") {
+    if (tutorRequestLock.current || isTutorRequestPending || isThinking) return;
     setHintRequests((currentCount) => currentCount + 1);
     setHintMenuOpen(false);
 
@@ -2737,6 +2790,7 @@ export default function DemoPage() {
   }
 
   function handleCheck() {
+    if (tutorRequestLock.current || isTutorRequestPending || isThinking) return;
     const trimmedAttempt = attempt.trim();
 
     if (!trimmedAttempt) {
@@ -2798,7 +2852,7 @@ export default function DemoPage() {
   }
 
   function handlePracticeGenerate() {
-    if (isThinking || !canUseDemo()) return;
+    if (isThinking || isTutorRequestPending || !canUseDemo()) return;
 
     if (!currentProblem.trim() && problem.trim()) {
       setCurrentProblem(problem.trim());
@@ -2849,7 +2903,7 @@ export default function DemoPage() {
   }
 
   function handleRecommendedPractice() {
-    if (!learningRecommendation || isThinking || !canUseDemo()) return;
+    if (!learningRecommendation || isThinking || isTutorRequestPending || !canUseDemo()) return;
 
     if (!currentProblem.trim() && problem.trim()) {
       setCurrentProblem(problem.trim());
@@ -2923,7 +2977,7 @@ export default function DemoPage() {
   }
 
   function handleQueuedPractice(item: PracticeQueueItem) {
-    if (isThinking || !canUseDemo()) return;
+    if (isThinking || isTutorRequestPending || !canUseDemo()) return;
 
     setSelectedPracticeTopic(
       practiceTopics.includes(item.topic) ? item.topic : "Algebra"
@@ -2964,6 +3018,7 @@ export default function DemoPage() {
   }
 
   function handleSendMessage() {
+    if (tutorRequestLock.current || isTutorRequestPending || isThinking) return;
     const trimmedAttempt = attempt.trim();
 
     if (!trimmedAttempt) {
@@ -3167,7 +3222,7 @@ export default function DemoPage() {
               </p>
               <button
                 onClick={handleGenerateSimilarPractice}
-                disabled={isThinking || usageLimitReached}
+                disabled={isThinking || isTutorRequestPending || usageLimitReached}
                 className="text-xs font-semibold text-cyan-700 hover:text-cyan-800 disabled:text-slate-400"
               >
                 Edit
@@ -3179,7 +3234,7 @@ export default function DemoPage() {
                 <button
                   key={item.id}
                   onClick={() => handleQueuedPractice(item)}
-                  disabled={isThinking || usageLimitReached}
+                  disabled={isThinking || isTutorRequestPending || usageLimitReached}
                   className="w-full rounded-2xl bg-white px-3 py-3 text-left shadow-sm transition hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -3399,7 +3454,11 @@ export default function DemoPage() {
                             : ""
                       }`}
                     >
-                      <MathMessage content={message.content} />
+                      {message.id === streamingMessageId ? (
+                        <p className="whitespace-pre-wrap">{message.content}</p>
+                      ) : (
+                        <MathMessage content={message.content} />
+                      )}
                     </div>
                   </div>
                 ))}
@@ -3415,7 +3474,7 @@ export default function DemoPage() {
                       <button
                         onClick={handleRecommendedPractice}
                         disabled={
-                          isThinking ||
+                          isThinking || isTutorRequestPending ||
                           usageLimitReached ||
                           checkpointPracticeState === "generating"
                         }
@@ -3478,6 +3537,18 @@ export default function DemoPage() {
                     </div>
                   )}
 
+                  {isSavingTutorResponse && (
+                    <p role="status" className="px-4 text-sm text-slate-500">Saving your progress...</p>
+                  )}
+                  {interruptedRequest && !isTutorRequestPending && !usageLimitReached && (
+                    <div className="px-4 text-sm text-slate-600">
+                      <button type="button" className="font-semibold text-cyan-700"
+                        onClick={() => void requestTutorHelp(interruptedRequest.mode, interruptedRequest.studentMessage, interruptedRequest.options)}>
+                        Send again
+                      </button>
+                      {!isLoggedIn && <p>This starts a new response and uses another demo turn.</p>}
+                    </div>
+                  )}
                   {isThinking && (
                     <div className="flex items-start gap-3 pl-1">
                       <div className="stepwise-thinking-avatar flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-cyan-100 text-xs font-bold text-cyan-700">
@@ -3554,7 +3625,7 @@ export default function DemoPage() {
                         <button
                           key={hint.level}
                           onClick={() => handleHint(hint.level)}
-                          disabled={isThinking || usageLimitReached}
+                          disabled={isThinking || isTutorRequestPending || usageLimitReached}
                           className="rounded-full bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-cyan-50 hover:text-cyan-700 disabled:cursor-not-allowed disabled:text-slate-400"
                         >
                           {hint.label}
@@ -3599,7 +3670,7 @@ export default function DemoPage() {
                   <div className="flex flex-wrap gap-1.5">
                     <button
                       onClick={() => setHintMenuOpen((isOpen) => !isOpen)}
-                      disabled={isThinking || usageLimitReached}
+                      disabled={isThinking || isTutorRequestPending || usageLimitReached}
                       className="rounded-full bg-cyan-50 px-3.5 py-1.5 text-sm font-semibold text-cyan-800 transition hover:-translate-y-0.5 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:text-slate-400"
                     >
                       Hints
@@ -3607,7 +3678,7 @@ export default function DemoPage() {
 
                     <button
                       onClick={handleCheck}
-                      disabled={isThinking || usageLimitReached}
+                      disabled={isThinking || isTutorRequestPending || usageLimitReached}
                       className="rounded-full bg-slate-950 px-3.5 py-1.5 text-sm font-semibold text-white shadow-sm shadow-slate-200 transition hover:-translate-y-0.5 hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
                     >
                       Check Reasoning
@@ -3615,7 +3686,7 @@ export default function DemoPage() {
 
                     <button
                       onClick={handleGenerateSimilarPractice}
-                      disabled={isThinking || usageLimitReached}
+                      disabled={isThinking || isTutorRequestPending || usageLimitReached}
                       className="rounded-full bg-white px-3.5 py-1.5 text-sm font-semibold text-slate-500 ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:bg-slate-50 hover:text-cyan-700 disabled:cursor-not-allowed disabled:text-slate-400"
                     >
                       Practice
@@ -3623,7 +3694,7 @@ export default function DemoPage() {
 
                     <button
                       onClick={handleSendMessage}
-                      disabled={isThinking || usageLimitReached || !attempt.trim()}
+                      disabled={isThinking || isTutorRequestPending || usageLimitReached || !attempt.trim()}
                       className="rounded-full bg-cyan-500 px-3.5 py-1.5 text-sm font-semibold text-white shadow-sm shadow-cyan-100 transition hover:-translate-y-0.5 hover:bg-cyan-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                     >
                       Send
@@ -3868,7 +3939,7 @@ export default function DemoPage() {
 
                   <button
                     onClick={handleConfirmDetectedProblem}
-                    disabled={isThinking || isExtracting || !editedExtractedProblem.trim()}
+                    disabled={isThinking || isTutorRequestPending || isExtracting || !editedExtractedProblem.trim()}
                     className="rounded-full bg-cyan-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm shadow-cyan-100 hover:bg-cyan-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                   >
                     Correct - Start Tutoring
@@ -3955,7 +4026,7 @@ export default function DemoPage() {
                   <button
                     onClick={handleRecommendedPractice}
                     disabled={
-                      isThinking ||
+                      isThinking || isTutorRequestPending ||
                       usageLimitReached ||
                       checkpointPracticeState === "generating"
                     }
@@ -4099,7 +4170,7 @@ export default function DemoPage() {
 
               <button
                 onClick={handlePracticeGenerate}
-                disabled={isThinking || usageLimitReached}
+                disabled={isThinking || isTutorRequestPending || usageLimitReached}
                 className="rounded-full bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-cyan-100 hover:bg-cyan-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
               >
                 {practiceState === "starter"

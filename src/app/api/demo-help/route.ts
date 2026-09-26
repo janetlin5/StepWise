@@ -1,3 +1,4 @@
+import { createTutorStream } from "@/lib/tutorStreamServer";
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import type { LearningProfile } from "@/lib/learningProfile";
@@ -328,6 +329,19 @@ function getAdaptiveGuidance({
 }
 
 export async function POST(request: Request) {
+  const requestId = crypto.randomUUID();
+  const startedAt = performance.now();
+  let previousMark = startedAt;
+  const mark = (stage: string) => {
+    const now = performance.now();
+    console.info("Tutor timing", {
+      requestId,
+      stage,
+      durationMs: Math.round(now - previousMark),
+      elapsedMs: Math.round(now - startedAt),
+    });
+    previousMark = now;
+  };
   try {
     const body = (await request.json()) as DemoHelpRequest;
     const requestedMode = body.mode ?? "general";
@@ -376,9 +390,12 @@ export async function POST(request: Request) {
 
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
+      timeout: 45000,
+      maxRetries: 0,
     });
     const accessToken = getBearerToken(request);
     const user = await getAuthenticatedUser(accessToken);
+    mark("authentication");
     const hintLevel = body.hintLevel;
     const practiceTopic = body.practiceTopic?.trim() || "Use the current problem context.";
     const practiceDifficulty = body.practiceDifficulty?.trim() || "Appropriate for the student.";
@@ -433,6 +450,7 @@ export async function POST(request: Request) {
       );
     }
 
+    mark("usage_check");
     if (user && activeSessionId && !worksheetContext) {
       try {
         const supabase = createSupabaseServerClient(accessToken);
@@ -529,6 +547,7 @@ export async function POST(request: Request) {
       }
     }
 
+    mark("memory_and_session");
     const tutoringState = deriveTutoringState({
       mode,
       studentMessage,
@@ -566,10 +585,160 @@ export async function POST(request: Request) {
       hintEscalationLevel,
     });
 
-    let message: string;
     let answerEvaluation: AnswerEvaluation | null = null;
 
+    // Persists usage, learning memory, and the conversation thread for
+    // signed-in users. Takes the COMPLETE assistant message, so the streaming
+    // path calls it after the stream finishes accumulating text.
+    const persistTutorResponse = async (finalMessage: string) => {
+      if (!user) return;
+      let saved = true;
+      // Usage can save independently; memory and thread writes stay ordered
+      // because they both update session metadata.
+      const usageWrite = recordUsageEvent({
+        userId: user.id,
+        eventType,
+        accessToken,
+      }).catch((error: unknown) => {
+        saved = false;
+        console.error("Usage event save error:", error);
+      });
+
+      const memoryWrite = recordLearningMemoryEvent({
+        userId: user.id,
+        accessToken,
+        sessionId: activeSessionId,
+        profile: learningProfile,
+        mode,
+        problem,
+        studentMessage,
+        assistantMessage: finalMessage,
+        topic: learningProfile.currentSubject,
+        skills: learningProfile.recentConcepts?.slice(0, 5),
+        tutoringState,
+        mistakePatterns,
+        conversationHistory,
+      }).catch((error: unknown) => {
+        saved = false;
+        console.error("Learning memory save error:", error);
+      });
+
+      const conversationWrite = (async () => {
+        if (!activeSessionId) return;
+
+        // Both writes update session metadata. Save the thread after memory so
+        // the memory upsert cannot overwrite the conversation and worksheet.
+        await memoryWrite;
+
+        try {
+          const supabase = createSupabaseServerClient(accessToken);
+          const now = new Date().toISOString();
+          const savedThreadMessages = buildSavedThreadMessages(
+            conversationHistory,
+            studentMessage,
+            finalMessage
+          );
+
+          const { error: conversationInsertError } = await supabase
+            .from("conversation_messages")
+            .insert([
+            {
+              user_id: user.id,
+              session_id: activeSessionId,
+              role: "user",
+              content: studentMessage,
+          metadata: {
+                mode,
+                tutorMode: routedIntent.mode,
+                routingReason: routedIntent.reason,
+                tutoringState,
+                answerEvaluation,
+                source: "demo_help",
+              },
+              created_at: now,
+            },
+            {
+              user_id: user.id,
+              session_id: activeSessionId,
+              role: "assistant",
+              content: finalMessage,
+              metadata: {
+                mode,
+                tutorMode: routedIntent.mode,
+                routingReason: routedIntent.reason,
+                tutoringState,
+                answerEvaluation,
+                source: "demo_help",
+              },
+              created_at: new Date(Date.now() + 1).toISOString(),
+            },
+          ]);
+
+          if (conversationInsertError) {
+            saved = false;
+            console.error(
+              "Conversation message insert error:",
+              conversationInsertError
+            );
+          }
+
+          const { data: existingSession } = await supabase
+            .from("learning_sessions")
+            .select("tutor_thread, metadata")
+            .eq("id", activeSessionId)
+            .eq("user_id", user.id)
+            .maybeSingle();
+          const existingTutorThread = toPlainObject(
+            existingSession?.tutor_thread
+          );
+          const existingMetadata = toPlainObject(existingSession?.metadata);
+          const existingWorksheetContext =
+            getStoredWorksheetContext(existingSession);
+          const activeWorksheetContext =
+            worksheetContext ?? existingWorksheetContext ?? undefined;
+          const { error: threadUpdateError } = await supabase
+            .from("learning_sessions")
+            .update({
+              tutor_thread: {
+                ...existingTutorThread,
+                source: "demo_help",
+                messages: savedThreadMessages,
+                ...(activeWorksheetContext
+                  ? { worksheetContext: activeWorksheetContext }
+                  : {}),
+              },
+              metadata: {
+                ...existingMetadata,
+                mode,
+                tutorMode: routedIntent.mode,
+                routingReason: routedIntent.reason,
+                recentMessages: savedThreadMessages,
+                ...(activeWorksheetContext
+                  ? { worksheetContext: activeWorksheetContext }
+                  : {}),
+              },
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", activeSessionId)
+            .eq("user_id", user.id);
+
+          if (threadUpdateError) {
+            saved = false;
+            console.error("Conversation thread fallback save error:", threadUpdateError);
+          }
+        } catch (error) {
+          saved = false;
+          console.error("Conversation message save error:", error);
+        }
+      })();
+
+      await Promise.allSettled([usageWrite, memoryWrite, conversationWrite]);
+      mark("persistence");
+      if (!saved) throw new Error("Tutor response persistence failed");
+    };
+
     if (answerCheckIntent) {
+      let message: string;
       if (!submittedAnswerSignal) {
         message =
           "I can check it — paste your answer or current work, and I’ll give you a clear verdict first.";
@@ -590,8 +759,33 @@ export async function POST(request: Request) {
           includeExplanation: asksForAnswerExplanation(studentMessage),
         });
       }
+
+      // Answer verdicts stay on the non-streaming JSON path: the evaluation
+      // is a short structured call, so there is nothing meaningful to stream.
+      mark("answer_evaluation");
+      // Preserve the evaluated answer even if saving fails, as on the
+      // original JSON path. Streaming reports save failures separately.
+      await persistTutorResponse(message).catch(() => {});
+      const answerResponseBody = {
+        message,
+        sessionId: activeSessionId,
+        anonymousUsage: anonymousUsage
+          ? {
+              used: anonymousUsage.used + 1,
+              limit: anonymousUsage.limit,
+            }
+          : undefined,
+      };
+      const answerResponse = NextResponse.json(answerResponseBody);
+      if (anonymousUsage) {
+        return addAnonymousDemoUsageCookie(
+          answerResponse,
+          anonymousUsage.used + 1
+        );
+      }
+      return answerResponse;
     } else {
-      const completion = await openai.chat.completions.create({
+      const generate = (signal: AbortSignal) => openai.chat.completions.create({
         model: process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
         messages: [
           { role: "system", content: systemPrompt },
@@ -659,168 +853,39 @@ ${studentMessage}
         ],
         temperature: 0.55,
         max_completion_tokens: 700,
+        stream: true,
+      }, { signal });
+
+      const tutorStream = createTutorStream({
+        generate,
+        persist: persistTutorResponse,
+        meta: {
+          requestId,
+          sessionId: activeSessionId,
+          anonymousUsage: anonymousUsage
+            ? { used: anonymousUsage.used + 1, limit: anonymousUsage.limit }
+            : undefined,
+        },
+        onStage: mark,
       });
 
-      message =
-        completion.choices[0]?.message.content?.trim() ||
-        "I can help, but I need a little more detail first. What have you tried?";
-    }
-
-    if (user) {
-      // These writes don't affect the response, so run them concurrently
-      // instead of sequentially before sending it back to the student.
-      const usageWrite = recordUsageEvent({
-        userId: user.id,
-        eventType,
-        accessToken,
-      }).catch((error: unknown) => {
-        console.error("Usage event save error:", error);
+      const streamResponse = new NextResponse(tutorStream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+        },
       });
-
-      const memoryWrite = recordLearningMemoryEvent({
-        userId: user.id,
-        accessToken,
-        sessionId: activeSessionId,
-        profile: learningProfile,
-        mode,
-        problem,
-        studentMessage,
-        assistantMessage: message,
-        topic: learningProfile.currentSubject,
-        skills: learningProfile.recentConcepts?.slice(0, 5),
-        tutoringState,
-        mistakePatterns,
-        conversationHistory,
-      }).catch((error: unknown) => {
-        console.error("Learning memory save error:", error);
-      });
-
-      const conversationWrite = (async () => {
-        if (!activeSessionId) return;
-
-        // Both writes update session metadata. Save the thread after memory so
-        // the memory upsert cannot overwrite the conversation and worksheet.
-        await memoryWrite;
-
-        try {
-          const supabase = createSupabaseServerClient(accessToken);
-          const now = new Date().toISOString();
-          const savedThreadMessages = buildSavedThreadMessages(
-            conversationHistory,
-            studentMessage,
-            message
-          );
-
-          const { error: conversationInsertError } = await supabase
-            .from("conversation_messages")
-            .insert([
-            {
-              user_id: user.id,
-              session_id: activeSessionId,
-              role: "user",
-              content: studentMessage,
-          metadata: {
-                mode,
-                tutorMode: routedIntent.mode,
-                routingReason: routedIntent.reason,
-                tutoringState,
-                answerEvaluation,
-                source: "demo_help",
-              },
-              created_at: now,
-            },
-            {
-              user_id: user.id,
-              session_id: activeSessionId,
-              role: "assistant",
-              content: message,
-              metadata: {
-                mode,
-                tutorMode: routedIntent.mode,
-                routingReason: routedIntent.reason,
-                tutoringState,
-                answerEvaluation,
-                source: "demo_help",
-              },
-              created_at: new Date(Date.now() + 1).toISOString(),
-            },
-          ]);
-
-          if (conversationInsertError) {
-            console.error(
-              "Conversation message insert error:",
-              conversationInsertError
-            );
-          }
-
-          const { data: existingSession } = await supabase
-            .from("learning_sessions")
-            .select("tutor_thread, metadata")
-            .eq("id", activeSessionId)
-            .eq("user_id", user.id)
-            .maybeSingle();
-          const existingTutorThread = toPlainObject(
-            existingSession?.tutor_thread
-          );
-          const existingMetadata = toPlainObject(existingSession?.metadata);
-          const existingWorksheetContext =
-            getStoredWorksheetContext(existingSession);
-          const activeWorksheetContext =
-            worksheetContext ?? existingWorksheetContext ?? undefined;
-          const { error: threadUpdateError } = await supabase
-            .from("learning_sessions")
-            .update({
-              tutor_thread: {
-                ...existingTutorThread,
-                source: "demo_help",
-                messages: savedThreadMessages,
-                ...(activeWorksheetContext
-                  ? { worksheetContext: activeWorksheetContext }
-                  : {}),
-              },
-              metadata: {
-                ...existingMetadata,
-                mode,
-                tutorMode: routedIntent.mode,
-                routingReason: routedIntent.reason,
-                recentMessages: savedThreadMessages,
-                ...(activeWorksheetContext
-                  ? { worksheetContext: activeWorksheetContext }
-                  : {}),
-              },
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", activeSessionId)
-            .eq("user_id", user.id);
-
-          if (threadUpdateError) {
-            console.error("Conversation thread fallback save error:", threadUpdateError);
-          }
-        } catch (error) {
-          console.error("Conversation message save error:", error);
-        }
-      })();
-
-      await Promise.allSettled([usageWrite, memoryWrite, conversationWrite]);
+      if (anonymousUsage) {
+        return addAnonymousDemoUsageCookie(
+          streamResponse,
+          anonymousUsage.used + 1
+        );
+      }
+      return streamResponse;
     }
 
-    const responseBody = {
-      message,
-      sessionId: activeSessionId,
-      anonymousUsage: anonymousUsage
-        ? {
-            used: anonymousUsage.used + 1,
-            limit: anonymousUsage.limit,
-          }
-        : undefined,
-    };
-    const response = NextResponse.json(responseBody);
-
-    if (anonymousUsage) {
-      return addAnonymousDemoUsageCookie(response, anonymousUsage.used + 1);
-    }
-
-    return response;
   } catch (error) {
     console.error("Demo help API error:", error);
 
