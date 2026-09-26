@@ -61,7 +61,11 @@ export function getAnonymousDemoUsageFromCookie(cookieHeader: string | null) {
 }
 
 export function encodeAnonymousDemoUsage(used: number) {
-  return encodeURIComponent(JSON.stringify({ used }));
+  // NOTE: Next.js `response.cookies.set()` percent-encodes the cookie value
+  // itself, so pre-encoding here would double-encode it. A double-encoded
+  // value fails JSON.parse on read, silently resetting usage to 0 every
+  // request (counter stuck at 1/5, demo limit never enforced).
+  return JSON.stringify({ used });
 }
 
 export function decodeAnonymousDemoUsage(value: string) {
