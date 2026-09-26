@@ -1,5 +1,6 @@
 "use client";
 
+import { hasAnswerCheckIntent, hasProposedNumericAnswer } from "@/lib/answerCheckIntent";
 import Link from "next/link";
 import { readTutorStream, TutorStreamError } from "@/lib/tutorStreamClient";
 import ReactMarkdown from "react-markdown";
@@ -519,18 +520,13 @@ function hasFullAttemptSignal(text: string) {
   if (!trimmedText) return false;
 
   return (
+    hasProposedNumericAnswer(trimmedText) ||
     /(?:^|\s)(?:x|y|[a-z])\s*=/.test(trimmedText) ||
     /=/.test(trimmedText) ||
     /answer is|final answer|therefore|i got|is this right|does this work/i.test(
       trimmedText
     ) ||
     trimmedText.split(/\s+/).length >= 12
-  );
-}
-
-function hasAnswerCheckIntent(text: string) {
-  return /check (?:my )?(?:answer|work)|can you check|verify|did i get (?:this|it)?\s*right|is (?:this|that|it|my answer|the answer)(?:\b|[^a-z])|is (?:the\s+)?answer\s+(?:for|to)\s+#?\d+[a-z]?|is this (?:right|correct)|is my answer|does this (?:work|look right)|would this be|my answer is|answer is|i got|final answer|correct\?/i.test(
-    text
   );
 }
 

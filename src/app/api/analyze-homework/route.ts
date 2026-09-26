@@ -1,3 +1,4 @@
+import { hasAnswerCheckIntent } from "@/lib/answerCheckIntent";
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import type { LearningProfile } from "@/lib/learningProfile";
@@ -824,12 +825,6 @@ function lowercaseFirst(text: string) {
 
 function asksForAnswerExplanation(text: string) {
   return /\bwhy\b|explain|walk me through|show (?:me )?(?:why|how)|how did|review|reasoning/i.test(
-    text
-  );
-}
-
-function hasAnswerCheckIntent(text: string) {
-  return /check (?:my )?(?:answer|work)|can you check|verify|did i get (?:this|it)?\s*right|is (?:this|that|it|my answer|the answer)(?:\b|[^a-z])|is (?:the\s+)?answer\s+(?:for|to)\s+#?\d+[a-z]?|is this (?:right|correct)|is my answer|does this (?:work|look right)|would this be|my answer is|answer is|i got|final answer|correct\?/i.test(
     text
   );
 }
