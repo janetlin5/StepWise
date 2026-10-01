@@ -1,5 +1,6 @@
 "use client";
 
+import { getHomeworkReadingRegions, getHomeworkImageSize } from "@/lib/homeworkImage";
 import { hasAnswerCheckIntent, hasProposedNumericAnswer } from "@/lib/answerCheckIntent";
 import Link from "next/link";
 import { readTutorStream, TutorStreamError } from "@/lib/tutorStreamClient";
@@ -1659,10 +1660,11 @@ export default function DemoPage() {
   async function fetchWithTimeout(
     input: RequestInfo | URL,
     init: RequestInit,
-    timeoutMessage: string
+    timeoutMessage: string,
+    timeoutMs = 30000
   ) {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 30000);
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       return await fetch(input, {
@@ -1787,7 +1789,7 @@ export default function DemoPage() {
     });
   }
 
-  async function enhanceHomeworkImageDataUrl(
+  async function prepareHomeworkImageDataUrl(
     file: File,
     cropRegion?: CropRegion | null
   ) {
@@ -1800,12 +1802,10 @@ export default function DemoPage() {
     try {
       const image = await loadImage(sourceUrl);
       const crop = getImageCropBox(image, cropRegion);
-      const longestSide = Math.max(crop.width, crop.height);
-      const upscaleFactor = longestSide < 1400 ? 1400 / longestSide : 1;
-      const scale = Math.min(2.25, upscaleFactor);
+      const size = getHomeworkImageSize(crop.width, crop.height);
       const canvas = document.createElement("canvas");
-      canvas.width = Math.round(crop.width * scale);
-      canvas.height = Math.round(crop.height * scale);
+      canvas.width = size.width;
+      canvas.height = size.height;
 
       const context = canvas.getContext("2d");
       if (!context) {
@@ -1814,7 +1814,6 @@ export default function DemoPage() {
 
       context.imageSmoothingEnabled = true;
       context.imageSmoothingQuality = "high";
-      context.filter = "grayscale(1) contrast(1.22) brightness(1.04)";
       context.drawImage(
         image,
         crop.x,
@@ -1826,45 +1825,10 @@ export default function DemoPage() {
         canvas.width,
         canvas.height
       );
-      context.filter = "none";
-      sharpenCanvas(context, canvas.width, canvas.height);
 
       return await canvasToDataUrl(canvas);
     } catch (error) {
-      console.warn("Image enhancement failed, using original upload.", error);
-      return readFileAsDataUrl(file);
-    } finally {
-      URL.revokeObjectURL(sourceUrl);
-    }
-  }
-
-  async function createReferenceImageDataUrl(file: File) {
-    if (!file.type.startsWith("image/")) {
-      return readFileAsDataUrl(file);
-    }
-
-    const sourceUrl = URL.createObjectURL(file);
-
-    try {
-      const image = await loadImage(sourceUrl);
-      const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
-      const scale = Math.min(1, 1800 / longestSide);
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.round(image.naturalWidth * scale);
-      canvas.height = Math.round(image.naturalHeight * scale);
-
-      const context = canvas.getContext("2d");
-      if (!context) {
-        return readFileAsDataUrl(file);
-      }
-
-      context.imageSmoothingEnabled = true;
-      context.imageSmoothingQuality = "high";
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-      return await canvasToDataUrl(canvas, 0.86);
-    } catch (error) {
-      console.warn("Reference image preparation failed, using original upload.", error);
+      console.warn("Image preparation failed, using original upload.", error);
       return readFileAsDataUrl(file);
     } finally {
       URL.revokeObjectURL(sourceUrl);
@@ -1872,68 +1836,18 @@ export default function DemoPage() {
   }
 
   async function buildHomeworkReadingViews(
-    file: File,
-    targetPrompt = ""
+    file: File
   ) {
     if (!file.type.startsWith("image/")) {
       return [];
     }
 
-    const regions = getHomeworkReadingRegions(targetPrompt);
+    const regions = getHomeworkReadingRegions();
     const views = await Promise.all(
-      regions.map((region) => enhanceHomeworkImageDataUrl(file, region))
+      regions.map((region) => prepareHomeworkImageDataUrl(file, region))
     );
 
     return Array.from(new Set(views)).slice(0, 4);
-  }
-
-  function getHomeworkReadingRegions(targetPrompt = ""): CropRegion[] {
-    const referencedNumber = getReferencedProblemNumber(targetPrompt);
-    const focusedRegion = referencedNumber
-      ? getEstimatedProblemRegion(referencedNumber)
-      : null;
-    const defaultRegions: CropRegion[] = [
-      { x: 3, y: 4, width: 67, height: 22 },
-      { x: 3, y: 19, width: 72, height: 22 },
-      { x: 3, y: 31, width: 72, height: 28 },
-      { x: 28, y: 55, width: 42, height: 36 },
-    ];
-
-    return uniqueRegions(
-      focusedRegion ? [focusedRegion, ...defaultRegions] : defaultRegions
-    );
-  }
-
-  function getReferencedProblemNumber(text: string) {
-    const match = text.match(/(?:#|problem|question|number|no\.)\s*(\d{1,2})\b/i);
-    return match ? Number(match[1]) : null;
-  }
-
-  function getEstimatedProblemRegion(problemNumber: number): CropRegion | null {
-    const worksheetRowRegions: Record<number, CropRegion> = {
-      9: { x: 3, y: 2, width: 67, height: 10 },
-      10: { x: 3, y: 7, width: 67, height: 10 },
-      11: { x: 3, y: 13, width: 67, height: 10 },
-      12: { x: 3, y: 18, width: 67, height: 10 },
-      13: { x: 2, y: 22, width: 72, height: 14 },
-      14: { x: 2, y: 29, width: 72, height: 14 },
-      15: { x: 2, y: 37, width: 72, height: 25 },
-      16: { x: 28, y: 58, width: 42, height: 34 },
-    };
-
-    return worksheetRowRegions[problemNumber] ?? null;
-  }
-
-  function uniqueRegions(regions: CropRegion[]) {
-    const seen = new Set<string>();
-
-    return regions.filter((region) => {
-      const key = `${region.x}-${region.y}-${region.width}-${region.height}`;
-
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
   }
 
   function loadImage(sourceUrl: string) {
@@ -1983,27 +1897,8 @@ export default function DemoPage() {
     };
   }
 
-  function sharpenCanvas(
-    context: CanvasRenderingContext2D,
-    width: number,
-    height: number
-  ) {
-    const imageData = context.getImageData(0, 0, width, height);
-    const pixels = imageData.data;
-
-    for (let index = 0; index < pixels.length; index += 4) {
-      const average = (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3;
-      const boosted = average > 184 ? Math.min(255, average + 18) : average * 0.9;
-      pixels[index] = boosted;
-      pixels[index + 1] = boosted;
-      pixels[index + 2] = boosted;
-    }
-
-    context.putImageData(imageData, 0, 0);
-  }
-
   function canvasToDataUrl(canvas: HTMLCanvasElement, quality = 0.92) {
-    return new Promise<string>((resolve) => {
+    return new Promise<string>((resolve, reject) => {
       canvas.toBlob(
         (blob) => {
           if (!blob) {
@@ -2013,6 +1908,7 @@ export default function DemoPage() {
 
           const reader = new FileReader();
           reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(new Error("I couldn’t prepare the image for upload. Please try again."));
           reader.readAsDataURL(blob);
         },
         "image/jpeg",
@@ -2043,7 +1939,7 @@ export default function DemoPage() {
           fileName: file.name,
           fileType: file.type,
           fileDataUrl,
-          originalFileDataUrl,
+          originalFileDataUrl: originalFileDataUrl !== fileDataUrl ? originalFileDataUrl : undefined,
           readingViewDataUrls,
           mode,
           targetPrompt,
@@ -2056,8 +1952,15 @@ export default function DemoPage() {
           })),
         }),
       },
-      "I’m taking longer than usual to read that image. Try again in a moment, or crop the specific problem you want help with."
+      "I’m taking longer than usual to analyze the image. Please try again or select a smaller area.",
+      60000
     );
+    if (response.status === 413) {
+      throw new Error("I couldn’t upload this image because it is too large. Please crop a smaller area and try again.");
+    }
+    if (!response.headers.get("content-type")?.includes("application/json")) {
+      throw new Error("I couldn’t reach the image analysis service. Please try again in a moment.");
+    }
     const data = (await response.json()) as HomeworkAnalysisResponse;
 
     if (response.status === 403) {
@@ -2184,15 +2087,16 @@ export default function DemoPage() {
     setIsExtracting(true);
     addMessage(
       "assistant",
-      "Got it — I can see the worksheet. Which problem would you like to work on?"
+      "Reading your worksheet..."
     );
 
     try {
-      const [originalFileDataUrl, fileDataUrl, readingViewDataUrls] = await Promise.all([
-        createReferenceImageDataUrl(file),
-        enhanceHomeworkImageDataUrl(file),
+      const [fileDataUrl, readingViewDataUrls] = await Promise.all([
+        prepareHomeworkImageDataUrl(file),
         buildHomeworkReadingViews(file),
       ]);
+      // This is the color reference too; the server omits the duplicate view.
+      const originalFileDataUrl = fileDataUrl;
       setUploadedOriginalFileDataUrl(originalFileDataUrl);
       setUploadedReadingViewDataUrls(readingViewDataUrls);
       setUploadedFileDataUrl(fileDataUrl);
@@ -2218,7 +2122,7 @@ export default function DemoPage() {
       console.error(error);
       addMessage(
         "assistant",
-        "I had trouble reading that upload. Try a clearer screenshot, or paste one problem here and I’ll help step by step."
+        getFriendlyClientError(error, "I couldn’t upload or analyze the image. Please try again; this doesn’t necessarily mean the photo is unclear.")
       );
     } finally {
       setIsExtracting(false);
@@ -2234,7 +2138,7 @@ export default function DemoPage() {
 
     try {
       const cropRegion = normalizeCropRegion(cropDraft);
-      const croppedFileDataUrl = await enhanceHomeworkImageDataUrl(
+      const croppedFileDataUrl = await prepareHomeworkImageDataUrl(
         uploadedFile,
         cropRegion
       );
@@ -2320,10 +2224,7 @@ export default function DemoPage() {
     const thinkingTimer = showThinkingAfterDelay("Reading the uploaded problem...");
 
     try {
-      const targetedReadingViewDataUrls = await buildHomeworkReadingViews(
-        uploadedFile,
-        studentMessage
-      );
+      // Reuse the prepared views; problem numbers do not imply page positions.
       const data = await analyzeUploadedHomework(
         uploadedFile,
         uploadedFileDataUrl,
@@ -2331,9 +2232,7 @@ export default function DemoPage() {
         studentMessage,
         "targeted_tutoring",
         uploadedOriginalFileDataUrl,
-        targetedReadingViewDataUrls.length
-          ? targetedReadingViewDataUrls
-          : uploadedReadingViewDataUrls
+        uploadedReadingViewDataUrls
       );
 
       if (!data) return;

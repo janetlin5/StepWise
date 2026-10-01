@@ -79,6 +79,8 @@ type HomeworkAnalysis = {
   problems: DetectedHomeworkProblem[];
 };
 
+class HomeworkAnalysisResponseError extends Error {}
+
 const imageAnalysisPrompt = `
 You are StepWise's homework perception system.
 
@@ -97,6 +99,10 @@ Extract structured information:
 
 Trust rules:
 - If there are multiple problems, separate them.
+- Preserve tables as complete Markdown tables in extractedText, keeping every column, row, header, and missing-value marker. Never silently drop rightmost columns.
+- Transcribe original printed questions and code literally, including underscores, case, operators, and blanks. Do not correct the worksheet while extracting it.
+- Keep handwritten answers, circled choices, and corrections separate from printed question text: put them in visualContext under "Student annotations". If uncertain, mark only that portion unclear and retain readable content.
+- Preserve dependencies: when a question refers to an earlier table or question, include the necessary shared context in that problem’s extractedText.
 - Preserve visible worksheet numbering exactly in each problem label, such as "#6" or "Problem 7". Do not relabel visible #6 as "Problem 1".
 - If you are uncertain, lower the confidence and say what needs confirmation.
 - Never pretend you fully understood an unclear image.
@@ -104,7 +110,7 @@ Trust rules:
 - The image may be a low-quality phone photo: tilted, shadowed, blurry, faint, or partially cropped. Read it patiently from the visible structure, use problem numbers/regions to separate items, and mark anything uncertain instead of guessing.
 - If both an enhanced image and an original image are provided, compare them before extracting math. Use the enhanced image for text contrast, but use the original image to verify fractions, signs, exponents, parentheses, and trig notation.
 - If close-up reading views are provided, inspect them before giving up on a blurry full-page photo. They may show the same worksheet in cropped sections or a likely target problem row.
-- When the student asks for a numbered problem, the first close-up reading view is the most likely target row. Read that row first, then use the full page only for surrounding context.
+- Close-up views are overlapping full-width sections in top-to-bottom order. Locate problem numbers from visible labels, never infer them from crop positions. Merge overlaps without duplicating questions.
 - For trig worksheets, preserve the equation structure exactly. For example, distinguish "csc θ = -5/4 and cot θ > 0" from "csc(θ = -4/3)"; do not move a right-hand-side fraction into a trig function's argument.
 - The "message" field is shown directly to the student after upload. Make it conversational and lightweight.
 - In "message", briefly identify the actual worksheet context, then ask which problem they want help with.
@@ -206,6 +212,17 @@ JSON shape:
 `;
 
 export async function POST(request: Request) {
+  const requestId = crypto.randomUUID();
+  const startedAt = performance.now();
+  let previousMark = startedAt;
+  const mark = (stage: string) => {
+    const now = performance.now();
+    console.info("Homework analysis timing", {
+      requestId, stage, durationMs: Math.round(now - previousMark),
+      elapsedMs: Math.round(now - startedAt),
+    });
+    previousMark = now;
+  };
   try {
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
@@ -292,8 +309,11 @@ export async function POST(request: Request) {
       );
     }
 
+    mark("authentication_and_usage");
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
+      timeout: 45000,
+      maxRetries: 0,
     });
 
     const completion = await openai.chat.completions.create({
@@ -322,13 +342,13 @@ export async function POST(request: Request) {
               type: "text",
               text: `
 Analyze this uploaded homework image: ${fileName}.
-The first image is an enhanced copy optimized for reading. ${
+The first image is ${cropRegion ? "the selected crop" : "the full-page reference"}, preserving original color and contrast. ${
   originalFileDataUrl && originalFileDataUrl !== fileDataUrl
-    ? "The second image is the original upload; compare it against the enhanced copy before extracting exact math."
+    ? "The second image is a full-page reference for the selected crop; use it for surrounding context."
     : "Only one image view is available."
 }
 ${readingViewDataUrls.length ? `Additional close-up reading views are provided after the full-page image(s). Use these crops to read small worksheet text and target problem rows.` : ""}
-${targetPrompt && readingViewDataUrls.length ? "For the student's requested problem, prioritize the first close-up reading view. If it contains multiple problem rows, extract only the row matching the requested problem number." : ""}
+${targetPrompt && readingViewDataUrls.length ? "Locate the requested problem by its visible label across the views. Do not assume it is in the first crop." : ""}
 ${cropRegion ? `Focus especially on this selected image region in percentages: ${JSON.stringify(cropRegion)}.` : ""}
 ${visionTargetPrompt ? `Requested problem: ${visionTargetPrompt}` : ""}
 Answer-checking intent: ${
@@ -379,6 +399,7 @@ ${coordinateCheck ? "Extract the original problem only. Do not solve or evaluate
       response_format: { type: "json_object" },
     });
 
+    mark("vision_generation");
     const rawContent =
       completion.choices[0]?.message.content?.trim() ||
       "";
@@ -419,6 +440,7 @@ ${coordinateCheck ? "Extract the original problem only. Do not solve or evaluate
       }
     }
 
+    mark("parsing_and_persistence");
     const response = NextResponse.json({
       ...analysis,
       sessionId,
@@ -436,14 +458,24 @@ ${coordinateCheck ? "Extract the original problem only. Do not solve or evaluate
 
     return response;
   } catch (error) {
-    console.error("Homework analysis API error:", error);
-
+    mark("failed");
+    const timeout = error instanceof OpenAI.APIConnectionTimeoutError;
+    const invalidResponse = error instanceof HomeworkAnalysisResponseError;
+    const status = error instanceof OpenAI.APIError ? error.status : undefined;
+    console.error("Homework analysis failed", { requestId, timeout, status });
     return NextResponse.json(
       {
-        message:
-          "I had trouble reading that image. Try uploading a clearer screenshot or crop the specific problem you want help with.",
+        message: invalidResponse
+          ? "I couldn’t process the image analysis response. Please try the upload again."
+          : timeout
+          ? "I’m taking longer than usual to analyze the image. Please try again or select a smaller area."
+          : status === 429
+            ? "I’m temporarily at capacity for image analysis. Please try again shortly."
+            : "I couldn’t complete the image analysis request. Please try again; this doesn’t necessarily mean the photo is unclear.",
+        errorCode: invalidResponse ? "invalid_analysis_response" : timeout ? "analysis_timeout" : status === 429 ? "analysis_busy" : "analysis_failed",
+        requestId,
       },
-      { status: 500 }
+      { status: timeout ? 504 : status === 429 ? 503 : 502 }
     );
   }
 }
@@ -532,17 +564,7 @@ function parseHomeworkAnalysis(
       problems,
     };
   } catch {
-    return {
-      message:
-        "I can see the upload, but not enough to confidently identify the problem. Could you crop the specific problem or paste the text?",
-      currentProblem: "",
-      confidence: 0.25,
-      needsUserSelection: true,
-      lowConfidenceReason: "The problem needs a clearer crop or typed text.",
-      visualSummary: "Uploaded homework image needs confirmation.",
-      answerEvaluation: null,
-      problems: [],
-    };
+    throw new HomeworkAnalysisResponseError("Invalid image analysis response");
   }
 }
 
