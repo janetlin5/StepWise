@@ -1,3 +1,4 @@
+import { evaluateEquationAnswer, submittedEquation, equationTarget } from "@/lib/equationGrading";
 import { evaluateCoordinateAnswer, isCoordinateCheck, coordinateTarget, ambiguousCoordinate } from "@/lib/coordinateGrading";
 import { hasAnswerCheckIntent } from "@/lib/answerCheckIntent";
 import OpenAI from "openai";
@@ -153,6 +154,7 @@ Your job:
 - Examples of references: "#6", "problem 7", "bottom graph", "parabola question", "geometry proof".
 - If the student asks whether an answer is correct, answer-checking comes first. Evaluate the submitted answer before tutoring.
 - Answer-checking phrases include "is this right?", "is this correct?", "can you check my answer?", "I got...", "my answer is...", and "is the answer...".
+- Accept mathematically equivalent fractions, decimals, and rearranged equations. Do not mark notation preferences as errors.
 - For answer checks, respond with: verdict, one-sentence explanation, optional next choice. Do not enter guided tutoring mode unless the answer is wrong or the student asks for explanation.
 - If the answer is correct, do not ask a checkpoint question. Do not say "let's start by..." or "what is the midpoint...". Stop after the concise confirmation and optional offer.
 - If the answer is partially correct or wrong, name the specific issue first, then guide only that weak piece.
@@ -248,9 +250,11 @@ export async function POST(request: Request) {
     const learningProfile = body.learningProfile;
     const conversationHistory = body.conversationHistory ?? [];
     const sessionId = body.sessionId?.trim() || crypto.randomUUID();
-    const answerCheckIntent = hasAnswerCheckIntent(targetPrompt);
+    const answerCheckIntent = hasAnswerCheckIntent(targetPrompt) || submittedEquation(targetPrompt) !== null;
     const coordinateCheck = mode === "targeted_tutoring" && answerCheckIntent && isCoordinateCheck(targetPrompt);
-    const visionTargetPrompt = coordinateCheck ? coordinateTarget(targetPrompt) : targetPrompt;
+    const equationCheck = mode === "targeted_tutoring" && answerCheckIntent && submittedEquation(targetPrompt) !== null;
+    const exactCheck = coordinateCheck || equationCheck;
+    const visionTargetPrompt = equationCheck ? equationTarget(targetPrompt) : coordinateCheck ? coordinateTarget(targetPrompt) : targetPrompt;
     const accessToken = getBearerToken(request);
     const user = await getAuthenticatedUser(accessToken);
     const anonymousUsage = user ? null : checkAnonymousDemoUsage(request);
@@ -325,13 +329,13 @@ export async function POST(request: Request) {
         {
           role: "system",
           content:
-            coordinateCheck
+            exactCheck
               ? `Extract ONLY the original printed problem identified by the reference. Ignore handwritten attempts, proposed answers, and answer keys. Do not solve or grade. Return JSON with currentProblem (complete original question including all diagram givens needed to solve it), confidence, needsUserSelection, message, and problems: []. Set needsUserSelection true and currentProblem empty if the target or any required givens are unclear. Do not substitute student work for the original question.`
               : mode === "targeted_tutoring"
               ? targetedTutoringPrompt
               : imageAnalysisPrompt,
         },
-        ...(coordinateCheck ? [] : conversationHistory).slice(-6).map((message) => ({
+        ...(exactCheck ? [] : conversationHistory).slice(-6).map((message) => ({
           role: message.role,
           content: message.content,
         })),
@@ -352,15 +356,15 @@ ${targetPrompt && readingViewDataUrls.length ? "Locate the requested problem by 
 ${cropRegion ? `Focus especially on this selected image region in percentages: ${JSON.stringify(cropRegion)}.` : ""}
 ${visionTargetPrompt ? `Requested problem: ${visionTargetPrompt}` : ""}
 Answer-checking intent: ${
-  answerCheckIntent && !coordinateCheck
+  answerCheckIntent && !exactCheck
     ? "Yes. Evaluate the submitted answer first. Do not begin guided tutoring unless the answer is wrong/close and a targeted correction is needed."
     : "No explicit answer-checking intent."
 }
 
 Learning memory:
-${coordinateCheck ? "Not needed for extraction." : JSON.stringify(learningProfile ?? {}, null, 2)}
+${exactCheck ? "Not needed for extraction." : JSON.stringify(learningProfile ?? {}, null, 2)}
 
-${coordinateCheck ? "Extract the original problem only. Do not solve or evaluate answers." : mode === "targeted_tutoring"
+${exactCheck ? "Extract the original problem only. Do not solve or evaluate answers." : mode === "targeted_tutoring"
   ? answerCheckIntent
     ? "Return only valid JSON. If the target problem and submitted answer are clear, give a concise correctness verdict first. Do not ask a guided question after a correct answer. If the target problem is unclear, ask for clarification."
     : "Return only valid JSON. If the target problem is clear, begin tutoring directly with one guided question. If it is not clear, ask for clarification."
@@ -405,14 +409,14 @@ ${coordinateCheck ? "Extract the original problem only. Do not solve or evaluate
       "";
     const analysis = parseHomeworkAnalysis(
       rawContent,
-      answerCheckIntent && !coordinateCheck,
+      answerCheckIntent && !exactCheck,
       targetPrompt
     );
-    if (coordinateCheck) {
+    if (exactCheck) {
       const evaluation = analysis.confidence >= 0.82 && !analysis.needsUserSelection && analysis.currentProblem
-        ? await evaluateCoordinateAnswer({ openai, problem: analysis.currentProblem, studentMessage: targetPrompt })
+        ? await (equationCheck ? evaluateEquationAnswer : evaluateCoordinateAnswer)({ openai, problem: analysis.currentProblem, studentMessage: targetPrompt })
         : null;
-      analysis.answerEvaluation = evaluation ?? ambiguousCoordinate("Please crop or paste the exact problem and one coordinate answer.");
+      analysis.answerEvaluation = evaluation ?? ambiguousCoordinate("Please crop or paste the exact problem and your answer.");
       analysis.message = buildAnswerEvaluationMessage(analysis.answerEvaluation, { includeExplanation: true });
     }
 

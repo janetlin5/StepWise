@@ -1,3 +1,4 @@
+import { evaluateEquationAnswer } from "@/lib/equationGrading";
 import { evaluateCoordinateAnswer, isCoordinateCheck } from "@/lib/coordinateGrading";
 import { hasAnswerCheckIntent, hasProposedNumericAnswer } from "@/lib/answerCheckIntent";
 import { createTutorStream } from "@/lib/tutorStreamServer";
@@ -1268,6 +1269,9 @@ async function evaluateStudentAnswer({
   mathSignNotes: string[];
   conversationHistory: ConversationMessage[];
 }): Promise<AnswerEvaluation> {
+  const equationEvaluation = await evaluateEquationAnswer({ openai, problem, studentMessage });
+  if (equationEvaluation) return equationEvaluation;
+
   const coordinateEvaluation = await evaluateCoordinateAnswer({ openai, problem, studentMessage });
   if (coordinateEvaluation) return coordinateEvaluation;
 
@@ -1292,7 +1296,7 @@ Choose exactly one verdict:
 - ambiguous
 
 Validation rules:
-- Compute the solution privately before deciding.
+- Compute the solution privately before deciding. Accept mathematically equivalent fractions, decimal coefficients, term order, and rearrangements; a preferred notation is not a correctness requirement.
 - For parabola/conic problems, verify vertex location, orientation, standard form, p value, 4p value, coefficient sign, and algebra consistency.
 - Preserve minus signs exactly. If the student wrote = -6(...), that is negative six.
 - Do not change verdict midstream. If the problem or answer is not clear enough, use ambiguous.
