@@ -1,5 +1,6 @@
 "use client";
 
+import { readAnonymousTranscript, writeAnonymousTranscript, clearAnonymousTranscript } from "@/lib/anonymousTranscript";
 import { getHomeworkReadingRegions, getHomeworkImageSize } from "@/lib/homeworkImage";
 import { hasAnswerCheckIntent, hasProposedNumericAnswer } from "@/lib/answerCheckIntent";
 import Link from "next/link";
@@ -790,6 +791,8 @@ function normalizeCropRegion(crop: CropRegion) {
 
 export default function DemoPage() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const [anonymousStorageReady, setAnonymousStorageReady] = useState(false);
+  const transcriptAuthRef = useRef<string | null | undefined>(undefined);
   const [problem, setProblem] = useState("");
   const [currentProblem, setCurrentProblem] = useState("");
   const [attempt, setAttempt] = useState("");
@@ -926,50 +929,68 @@ export default function DemoPage() {
   }, [uploadPreviewUrl]);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      const userId = data.session?.user.id ?? null;
-      const resumeSessionId = getSessionIdFromUrl();
-      setIsLoggedIn(Boolean(data.session?.access_token));
-      setCurrentUserId(userId);
-      setProfileSyncReady(false);
-
-      if (userId) {
-        void loadRemoteLearningProfile(userId).finally(() => {
-          setProfileSyncReady(true);
-        });
-        if (resumeSessionId) {
-          void loadConversation(resumeSessionId);
-        }
-      } else {
-        setInteractions(getAnonymousDemoUsageFromCookie());
-      }
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    let active = true;
+    let receivedAuthEvent = false;
+    const applySession = (session: { user: { id: string }; access_token: string } | null) => {
+      if (!active) return;
       const userId = session?.user.id ?? null;
-      const resumeSessionId = getSessionIdFromUrl();
+      const previousUser = transcriptAuthRef.current;
+      transcriptAuthRef.current = userId;
       setIsLoggedIn(Boolean(session?.access_token));
       setCurrentUserId(userId);
       setProfileSyncReady(false);
-
       if (userId) {
+        setAnonymousStorageReady(false);
+        try { clearAnonymousTranscript(window.sessionStorage); } catch { /* Unavailable storage. */ }
         void loadRemoteLearningProfile(userId).finally(() => {
-          setProfileSyncReady(true);
+          if (active) setProfileSyncReady(true);
         });
-        if (resumeSessionId) {
-          void loadConversation(resumeSessionId);
-        }
+        const resumeSessionId = getSessionIdFromUrl();
+        if (resumeSessionId) void loadConversation(resumeSessionId);
       } else {
+        if (previousUser === undefined) {
+          // Restore only after mount and confirmed anonymous authentication.
+          // Explicit saved-session links must not show a different local chat.
+          if (!getSessionIdFromUrl()) {
+            try {
+              const stored = readAnonymousTranscript(window.sessionStorage);
+              if (stored) {
+                setSessionId(stored.sessionId);
+                setCurrentProblem(stored.currentProblem);
+                setProblem(stored.problem);
+                setAttempt(stored.draft);
+                if (stored.messages.length) setMessages(stored.messages);
+              }
+            } catch { /* Browser can deny access to sessionStorage itself. */ }
+          }
+        } else if (previousUser) {
+          // Never copy the account's transcript into anonymous storage on logout.
+          startNewConversation();
+        }
+        setAnonymousStorageReady(true);
         setInteractions(getAnonymousDemoUsageFromCookie());
       }
-    });
-
-    return () => {
-      subscription.unsubscribe();
     };
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      receivedAuthEvent = true;
+      applySession(session);
+    });
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (!error && !receivedAuthEvent) applySession(data.session);
+    }).catch(() => { /* Unknown auth state: do not read or overwrite anonymous storage. */ });
+    return () => { active = false; subscription.unsubscribe(); };
   }, []);
+
+  useEffect(() => {
+    if (!anonymousStorageReady || isLoggedIn || transcriptAuthRef.current !== null ||
+      isTutorRequestPending || streamingMessageId !== null || isExtracting) return;
+    try {
+      writeAnonymousTranscript(window.sessionStorage, {
+        version: 1, sessionId, messages, currentProblem, problem, draft: attempt,
+      });
+    } catch { /* Storage may be disabled. */ }
+  }, [anonymousStorageReady, isLoggedIn, isTutorRequestPending, streamingMessageId,
+    isExtracting, sessionId, messages, currentProblem, problem, attempt]);
 
   function getSessionIdFromUrl() {
     if (typeof window === "undefined") return "";
@@ -1519,6 +1540,7 @@ export default function DemoPage() {
   }
 
   function startNewConversation() {
+    try { clearAnonymousTranscript(window.sessionStorage); } catch { /* Storage unavailable. */ }
     setSessionId(crypto.randomUUID());
     setProblem("");
     setCurrentProblem("");
