@@ -1,3 +1,4 @@
+import { ApiInputError, readJsonObject, requireTextWithinLimit, validateLearningProfile } from "@/lib/apiSecurity";
 import { evaluateEquationAnswer, submittedEquation, equationTarget } from "@/lib/equationGrading";
 import { evaluateCoordinateAnswer, isCoordinateCheck, coordinateTarget, ambiguousCoordinate } from "@/lib/coordinateGrading";
 import { hasAnswerCheckIntent } from "@/lib/answerCheckIntent";
@@ -15,6 +16,15 @@ import {
   getBearerToken,
   recordUsageEvent,
 } from "@/lib/usageLimits";
+import {
+  isAllowedRequestOrigin,
+  isValidImageDataUrl,
+  MAX_FILE_NAME_CHARS,
+  MAX_TARGET_PROMPT_CHARS,
+  sanitizeConversationHistory,
+  sanitizeCropRegion,
+  truncateText,
+} from "@/lib/apiSecurity";
 
 type ConversationMessage = {
   role: "user" | "assistant";
@@ -226,6 +236,18 @@ export async function POST(request: Request) {
     previousMark = now;
   };
   try {
+    // Same-origin check first: a vision call is the most expensive endpoint,
+    // and it must not be triggerable from an arbitrary third-party page.
+    if (!isAllowedRequestOrigin(request)) {
+      return NextResponse.json(
+        {
+          message:
+            "This request did not come from StepWise. Open StepWise and try again.",
+        },
+        { status: 403 }
+      );
+    }
+
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
         {
@@ -236,19 +258,44 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = (await request.json()) as AnalyzeHomeworkRequest;
-    const fileName = body.fileName?.trim() || "uploaded homework";
+    const body = (await readJsonObject(request, 4400000, ["fileName", "fileType", "fileDataUrl", "originalFileDataUrl", "mode", "targetPrompt", "sessionId"])) as AnalyzeHomeworkRequest;
+    validateLearningProfile(body.learningProfile);
+    const fileName =
+      truncateText(body.fileName?.trim() ?? "", MAX_FILE_NAME_CHARS) ||
+      "uploaded homework";
     const fileType = body.fileType?.trim() || "";
     const fileDataUrl = body.fileDataUrl ?? "";
-    const originalFileDataUrl = body.originalFileDataUrl ?? "";
-    const readingViewDataUrls = (body.readingViewDataUrls ?? [])
-      .filter((url) => typeof url === "string" && url.startsWith("data:image/"))
+    if (!isValidImageDataUrl(fileDataUrl)) {
+      return NextResponse.json(
+        {
+          message:
+            "I didn’t receive a readable image file. Try uploading the screenshot again, or paste the problem text here.",
+        },
+        { status: 400 }
+      );
+    }
+
+
+    // Validate the image payload itself, not just the client-declared
+    // fileType: the data URL is passed straight to the vision model, so an
+    // arbitrary https URL here would make OpenAI fetch an attacker address.
+    // The client always sends FileReader/canvas data:image/... URLs.
+    const originalFileDataUrl = isValidImageDataUrl(body.originalFileDataUrl)
+      ? (body.originalFileDataUrl as string)
+      : "";
+    const readingViewDataUrls = (Array.isArray(body.readingViewDataUrls) ? body.readingViewDataUrls : [])
+      .filter((url) => isValidImageDataUrl(url))
       .slice(0, 4);
-    const mode = body.mode ?? "extract";
-    const targetPrompt = body.targetPrompt?.trim() ?? "";
-    const cropRegion = body.cropRegion ?? null;
+    const mode = body.mode === "targeted_tutoring" ? "targeted_tutoring" : "extract";
+    const targetPrompt = requireTextWithinLimit(
+      body.targetPrompt,
+      MAX_TARGET_PROMPT_CHARS
+    );
+    const cropRegion = sanitizeCropRegion(body.cropRegion);
     const learningProfile = body.learningProfile;
-    const conversationHistory = body.conversationHistory ?? [];
+    // Same runtime role validation as demo-help: injected system entries
+    // must never reach the model.
+    const conversationHistory = sanitizeConversationHistory(body.conversationHistory);
     const sessionId = body.sessionId?.trim() || crypto.randomUUID();
     const answerCheckIntent = hasAnswerCheckIntent(targetPrompt) || submittedEquation(targetPrompt) !== null;
     const coordinateCheck = mode === "targeted_tutoring" && answerCheckIntent && isCoordinateCheck(targetPrompt);
@@ -259,15 +306,6 @@ export async function POST(request: Request) {
     const user = await getAuthenticatedUser(accessToken);
     const anonymousUsage = user ? null : checkAnonymousDemoUsage(request);
 
-    if (!fileDataUrl) {
-      return NextResponse.json(
-        {
-          message:
-            "I didn’t receive the file. Try uploading the screenshot again, or paste the problem text here.",
-        },
-        { status: 400 }
-      );
-    }
 
     if (!fileType.startsWith("image/")) {
       return NextResponse.json({
@@ -362,7 +400,7 @@ Answer-checking intent: ${
 }
 
 Learning memory:
-${exactCheck ? "Not needed for extraction." : JSON.stringify(learningProfile ?? {}, null, 2)}
+${exactCheck ? "Not needed for extraction." : truncateText(JSON.stringify(learningProfile ?? {}), 8000)}
 
 ${exactCheck ? "Extract the original problem only. Do not solve or evaluate answers." : mode === "targeted_tutoring"
   ? answerCheckIntent
@@ -462,6 +500,9 @@ ${exactCheck ? "Extract the original problem only. Do not solve or evaluate answ
 
     return response;
   } catch (error) {
+    if (error instanceof ApiInputError) {
+      return NextResponse.json({ message: error.message }, { status: error.status });
+    }
     mark("failed");
     const timeout = error instanceof OpenAI.APIConnectionTimeoutError;
     const invalidResponse = error instanceof HomeworkAnalysisResponseError;

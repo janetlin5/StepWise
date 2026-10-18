@@ -1,9 +1,11 @@
+import { ApiInputError, readJsonObject } from "@/lib/apiSecurity";
 import { NextResponse } from "next/server";
 import {
   createSupabaseServerClient,
   getAuthenticatedUser,
   getBearerToken,
 } from "@/lib/usageLimits";
+import { isAllowedRequestOrigin } from "@/lib/apiSecurity";
 
 type UpdateConversationRequest = {
   sessionId?: string;
@@ -263,6 +265,19 @@ function toPlainObject(value: unknown) {
 
 export async function PATCH(request: Request) {
   try {
+    // Session-status updates are state-changing, so they get the same
+    // same-origin check as the other mutation routes. (GET is a Bearer-authed
+    // read whose response is not readable cross-origin, so it needs none.)
+    if (!isAllowedRequestOrigin(request)) {
+      return NextResponse.json(
+        {
+          message:
+            "This request did not come from StepWise. Open StepWise and try again.",
+        },
+        { status: 403 }
+      );
+    }
+
     const accessToken = getBearerToken(request);
     const user = await getAuthenticatedUser(accessToken);
 
@@ -275,7 +290,7 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const body = (await request.json()) as UpdateConversationRequest;
+    const body = (await readJsonObject(request, 8000, ["sessionId", "status"])) as UpdateConversationRequest;
     const sessionId = body.sessionId?.trim();
     const status = body.status;
 
@@ -343,6 +358,9 @@ export async function PATCH(request: Request) {
           : "Session updated.",
     });
   } catch (error) {
+    if (error instanceof ApiInputError) {
+      return NextResponse.json({ message: error.message }, { status: error.status });
+    }
     console.error("Conversation update API error:", error);
 
     return NextResponse.json(

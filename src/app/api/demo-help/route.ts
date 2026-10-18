@@ -1,3 +1,4 @@
+import { ApiInputError, readJsonObject, requireTextWithinLimit, validateLearningProfile, sanitizeTutoringSignals } from "@/lib/apiSecurity";
 import { evaluateEquationAnswer } from "@/lib/equationGrading";
 import { evaluateCoordinateAnswer, isCoordinateCheck } from "@/lib/coordinateGrading";
 import { hasAnswerCheckIntent, hasProposedNumericAnswer } from "@/lib/answerCheckIntent";
@@ -36,6 +37,16 @@ import {
   summarizeLearningMemory,
 } from "@/lib/tutoringState";
 import type { TutoringSignals, TutoringState } from "@/lib/tutoringState";
+import {
+  isAllowedRequestOrigin,
+  MAX_PRACTICE_FIELD_CHARS,
+  MAX_PROBLEM_CHARS,
+  MAX_SIGNAL_STRING_CHARS,
+  MAX_WORKSHEET_SUMMARY_CHARS,
+  MAX_WORKSHEET_TEXT_CHARS,
+  sanitizeConversationHistory,
+  truncateText,
+} from "@/lib/apiSecurity";
 
 type DemoHelpMode =
   | "hint"
@@ -346,14 +357,26 @@ export async function POST(request: Request) {
     previousMark = now;
   };
   try {
-    const body = (await request.json()) as DemoHelpRequest;
+    // Reject cross-origin browser requests before parsing input or using the model.
+    if (!isAllowedRequestOrigin(request)) {
+      return NextResponse.json(
+        {
+          message:
+            "This request did not come from StepWise. Open StepWise and try again.",
+        },
+        { status: 403 }
+      );
+    }
+
+    const body = (await readJsonObject(request, 256000, ["message", "mode", "problem", "currentProblem", "practiceTopic", "practiceDifficulty", "practiceType", "sessionId"])) as DemoHelpRequest;
     if (!body || typeof body !== "object" || Array.isArray(body) ||
       (body.message !== undefined && typeof body.message !== "string")) {
       return NextResponse.json({ message: "Please provide a text message." }, { status: 400 });
     }
+    validateLearningProfile(body.learningProfile);
     const requestedMode = body.mode ?? "general";
 
-    if (!modeInstructions[requestedMode]) {
+    if (!Object.hasOwn(modeInstructions, requestedMode)) {
       return NextResponse.json(
         { message: "Unsupported tutoring mode." },
         { status: 400 }
@@ -377,7 +400,15 @@ export async function POST(request: Request) {
       );
     }
 
-    const rawProblemContext = [body.problem, body.currentProblem]
+    // Bound the other prompt inputs: only the live message was capped, so a
+    // huge pasted problem could blow up the prompt (and the bill) on its own.
+    const problemField = requireTextWithinLimit(body.problem, MAX_PROBLEM_CHARS);
+    const currentProblemField = requireTextWithinLimit(
+      body.currentProblem,
+      MAX_PROBLEM_CHARS
+    );
+
+    const rawProblemContext = [problemField, currentProblemField]
       .filter(Boolean)
       .filter(
         (context) =>
@@ -385,13 +416,14 @@ export async function POST(request: Request) {
           normalizeForTopicGuard(studentMessage)
       )
       .join("\n");
-    const conversationHistory = body.conversationHistory ?? [];
+    // Client history may contain user and assistant turns only.
+    const conversationHistory = sanitizeConversationHistory(body.conversationHistory);
     const topicClassification = classifyStepwiseTopic({
       message: studentMessage,
       problemContext: rawProblemContext,
       conversationHistory: conversationHistory.slice(-6).map((message) => message.content),
       mode: requestedMode,
-      practiceTopic: body.practiceTopic,
+      practiceTopic: truncateText(body.practiceTopic, MAX_PRACTICE_FIELD_CHARS),
     });
 
     if (topicClassification === "OFF_TOPIC") {
@@ -419,12 +451,20 @@ export async function POST(request: Request) {
     const accessToken = getBearerToken(request);
     const user = await getAuthenticatedUser(accessToken);
     mark("authentication");
-    const hintLevel = body.hintLevel;
-    const practiceTopic = body.practiceTopic?.trim() || "Use the current problem context.";
-    const practiceDifficulty = body.practiceDifficulty?.trim() || "Appropriate for the student.";
-    const practiceType = body.practiceType?.trim() || "Warm-Up Practice";
+    const hintLevel = typeof body.hintLevel === "string" && Object.hasOwn(hintInstructions, body.hintLevel)
+      ? body.hintLevel
+      : undefined;
+    const practiceTopic =
+      truncateText(body.practiceTopic?.trim() ?? "", MAX_PRACTICE_FIELD_CHARS) ||
+      "Use the current problem context.";
+    const practiceDifficulty =
+      truncateText(body.practiceDifficulty?.trim() ?? "", MAX_PRACTICE_FIELD_CHARS) ||
+      "Appropriate for the student.";
+    const practiceType =
+      truncateText(body.practiceType?.trim() ?? "", MAX_PRACTICE_FIELD_CHARS) ||
+      "Warm-Up Practice";
     let learningProfile: Partial<LearningProfile> = body.learningProfile ?? {};
-    const tutoringSignals = body.tutoringSignals ?? {};
+    const tutoringSignals = sanitizeTutoringSignals(body.tutoringSignals) as TutoringSignals;
     let persistentMemorySummary =
       "No persistent account memory available for this request.";
     let activeSessionId = body.sessionId;
@@ -435,7 +475,7 @@ export async function POST(request: Request) {
       tutoringSignals,
       worksheetContext,
       referencedWorksheetProblem: null,
-      hasProblemContext: Boolean(body.currentProblem?.trim() || body.problem?.trim()),
+      hasProblemContext: Boolean(currentProblemField || problemField),
     });
     const eventType: UsageEventType =
       preliminaryIntent.mode === "practice" ? "practice_generation" : "ai_message";
@@ -493,7 +533,7 @@ export async function POST(request: Request) {
     const referencedWorksheetProblem = findReferencedWorksheetProblem({
       message: studentMessage,
       worksheetContext,
-      currentProblem: body.currentProblem?.trim() || body.problem?.trim() || "",
+      currentProblem: currentProblemField || problemField || "",
     });
     const routedIntent = routeTutorIntent({
       requestedMode,
@@ -502,8 +542,8 @@ export async function POST(request: Request) {
       worksheetContext,
       referencedWorksheetProblem,
       hasProblemContext: Boolean(
-        body.currentProblem?.trim() ||
-          body.problem?.trim() ||
+        currentProblemField ||
+          problemField ||
           worksheetContext?.currentProblem?.trim() ||
           worksheetContext?.problems?.length
       ),
@@ -511,8 +551,8 @@ export async function POST(request: Request) {
     const mode = routedIntent.effectiveMode;
     const problem =
       referencedWorksheetProblem?.extractedText ||
-      body.currentProblem?.trim() ||
-      body.problem?.trim() ||
+      currentProblemField ||
+      problemField ||
       worksheetContext?.currentProblem?.trim() ||
       worksheetContext?.problems?.[0]?.extractedText?.trim() ||
       "No problem provided yet.";
@@ -910,6 +950,9 @@ ${studentMessage}
     }
 
   } catch (error) {
+    if (error instanceof ApiInputError) {
+      return NextResponse.json({ message: error.message }, { status: error.status });
+    }
     console.error("Demo help API error:", error);
 
     return NextResponse.json(
@@ -941,7 +984,12 @@ function compactTutoringSignals(signals: TutoringSignals) {
   for (const [key, value] of Object.entries(signals ?? {})) {
     if (value === undefined || value === null || value === false) continue;
     if (typeof value === "number" && value === 0) continue;
-    compact[key] = value as string | number | boolean;
+    // Signals are interpolated into the prompt, so a long client-supplied
+    // string value must not become unbounded prompt text.
+    compact[key] =
+      typeof value === "string"
+        ? truncateText(value, MAX_SIGNAL_STRING_CHARS)
+        : (value as string | number | boolean);
   }
 
   return compact;
@@ -1103,16 +1151,45 @@ function normalizeWorksheetContext(value: unknown): WorksheetContext | null {
     return null;
   }
 
+  // Worksheet fields are interpolated into the prompt on every turn, so
+  // descriptions are capped and oversized problem text is rejected rather
+  // than silently changing the math. Only 20 problems are retained.
+  const truncateProblem = (problem: WorksheetProblem): WorksheetProblem => ({
+    id: truncateText(problem.id, 200),
+    subject: truncateText(problem.subject, 200),
+    regionHint: truncateText(problem.regionHint, 500),
+    confidence: typeof problem.confidence === "number" ? problem.confidence : undefined,
+    needsConfirmation: problem.needsConfirmation === true,
+    label: truncateText(problem.label ?? "", 200),
+    extractedText: requireTextWithinLimit(problem.extractedText, MAX_WORKSHEET_TEXT_CHARS),
+    visualContext: truncateText(problem.visualContext, MAX_WORKSHEET_SUMMARY_CHARS),
+    skills: Array.isArray(problem.skills)
+      ? problem.skills
+          .filter((skill): skill is string => typeof skill === "string")
+          .slice(0, 5)
+          .map((skill) => truncateText(skill, 100))
+      : [],
+  });
+
   return {
-    fileName: typeof context.fileName === "string" ? context.fileName : "",
+    fileName:
+      typeof context.fileName === "string"
+        ? truncateText(context.fileName, 200)
+        : "",
     fileType: typeof context.fileType === "string" ? context.fileType : "",
     visualSummary:
-      typeof context.visualSummary === "string" ? context.visualSummary : "",
+      typeof context.visualSummary === "string"
+        ? truncateText(context.visualSummary, MAX_WORKSHEET_SUMMARY_CHARS)
+        : "",
     currentProblem:
-      typeof context.currentProblem === "string" ? context.currentProblem : "",
-    problems,
+      typeof context.currentProblem === "string"
+        ? requireTextWithinLimit(context.currentProblem, MAX_WORKSHEET_TEXT_CHARS)
+        : "",
+    problems: problems.map(truncateProblem),
     lastTargetPrompt:
-      typeof context.lastTargetPrompt === "string" ? context.lastTargetPrompt : "",
+      typeof context.lastTargetPrompt === "string"
+        ? truncateText(context.lastTargetPrompt, 1000)
+        : "",
     updatedAt: typeof context.updatedAt === "string" ? context.updatedAt : "",
   };
 }

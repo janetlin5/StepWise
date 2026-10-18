@@ -1,9 +1,15 @@
+import { ApiInputError, readJsonObject } from "@/lib/apiSecurity";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import {
   getAuthenticatedUser,
   getBearerToken,
 } from "@/lib/usageLimits";
+import {
+  isAllowedRequestOrigin,
+  MAX_FEEDBACK_MESSAGE_CHARS,
+  truncateJsonValue,
+} from "@/lib/apiSecurity";
 
 type FeedbackRequest = {
   category?: string;
@@ -24,7 +30,20 @@ const allowedCategories = new Set([
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as FeedbackRequest;
+    // Feedback is anonymous and writes to the database, so it gets the same
+    // same-origin check as the other state-changing routes, plus a size cap:
+    // an uncapped message/context could otherwise bloat the table per request.
+    if (!isAllowedRequestOrigin(request)) {
+      return NextResponse.json(
+        {
+          message:
+            "This request did not come from StepWise. Open StepWise and try again.",
+        },
+        { status: 403 }
+      );
+    }
+
+    const body = (await readJsonObject(request, 32000, ["message", "category", "pageUrl"])) as FeedbackRequest;
     const message = body.message?.trim() ?? "";
     const category = allowedCategories.has(body.category ?? "")
       ? body.category
@@ -40,6 +59,16 @@ export async function POST(request: Request) {
       );
     }
 
+    if (message.length > MAX_FEEDBACK_MESSAGE_CHARS) {
+      return NextResponse.json(
+        {
+          message:
+            "That feedback is too long — a couple of sentences is plenty.",
+        },
+        { status: 400 }
+      );
+    }
+
     const accessToken = getBearerToken(request);
     const user = await getAuthenticatedUser(accessToken);
     const supabase = createFeedbackClient(accessToken);
@@ -48,8 +77,10 @@ export async function POST(request: Request) {
       category,
       message,
       page_url: body.pageUrl?.slice(0, 500) ?? "",
-      context: body.context ?? {},
-      browser: body.browser ?? {},
+      // Diagnostic blobs are client-controlled: deep-truncate them so one
+      // request cannot store an unbounded JSON payload.
+      context: truncateJsonValue(body.context ?? {}),
+      browser: truncateJsonValue(body.browser ?? {}),
     });
 
     if (error) {
@@ -68,6 +99,9 @@ export async function POST(request: Request) {
       message: "Thanks. This helps make StepWise better.",
     });
   } catch (error) {
+    if (error instanceof ApiInputError) {
+      return NextResponse.json({ message: error.message }, { status: error.status });
+    }
     console.error("Feedback API error:", error);
 
     return NextResponse.json(

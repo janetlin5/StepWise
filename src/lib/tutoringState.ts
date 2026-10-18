@@ -1,4 +1,5 @@
 import type { LearningProfile } from "@/lib/learningProfile";
+import { MAX_MEMORY_STRING_CHARS } from "@/lib/apiSecurity";
 
 export type TutoringMode =
   | "hint"
@@ -224,45 +225,47 @@ export function getPacingGuidance({
 export function summarizeLearningMemory(profile?: Partial<LearningProfile>) {
   if (!profile) return "No long-term learning memory yet.";
 
+  // The profile is client-supplied, so every string is truncated: this
+  // summary is interpolated into the prompt, and item counts alone do not
+  // bound a single huge string (e.g. a megabyte `lastReflection`).
+  const cap = (text: unknown) =>
+    typeof text === "string" ? text.slice(0, MAX_MEMORY_STRING_CHARS) : "";
+  const capList = (items?: string[]) =>
+    Array.isArray(items) ? items.slice(0, 3).map(cap).join(", ") : "";
+
   const memoryParts = [
-    profile.currentSubject ? `Current subject: ${profile.currentSubject}` : "",
+    profile.currentSubject ? `Current subject: ${cap(profile.currentSubject)}` : "",
     profile.strongSkills?.length
-      ? `Strong skills: ${profile.strongSkills.slice(0, 3).join(", ")}`
+      ? `Strong skills: ${capList(profile.strongSkills)}`
       : "",
     profile.conceptsNeedingReinforcement?.length
-      ? `Needs reinforcement: ${profile.conceptsNeedingReinforcement
-          .slice(0, 3)
-          .join(", ")}`
+      ? `Needs reinforcement: ${capList(profile.conceptsNeedingReinforcement)}`
       : "",
     profile.recurringMistakes?.length
-      ? `Recurring mistakes: ${profile.recurringMistakes.slice(0, 3).join(", ")}`
+      ? `Recurring mistakes: ${capList(profile.recurringMistakes)}`
       : "",
     profile.formulaConfusions?.length
-      ? `Formula support needed: ${profile.formulaConfusions
-          .slice(0, 3)
-          .join(", ")}`
+      ? `Formula support needed: ${capList(profile.formulaConfusions)}`
       : "",
     profile.setupMistakes?.length
-      ? `Setup patterns to support: ${profile.setupMistakes.slice(0, 3).join(", ")}`
+      ? `Setup patterns to support: ${capList(profile.setupMistakes)}`
       : "",
     profile.conceptualMisunderstandings?.length
-      ? `Concepts to clarify gently: ${profile.conceptualMisunderstandings
-          .slice(0, 3)
-          .join(", ")}`
+      ? `Concepts to clarify gently: ${capList(profile.conceptualMisunderstandings)}`
       : "",
     profile.spacedReviewQueue?.length
-      ? `Spaced review queue: ${profile.spacedReviewQueue.slice(0, 3).join(", ")}`
+      ? `Spaced review queue: ${capList(profile.spacedReviewQueue)}`
       : "",
     profile.problemHistory?.[0]
-      ? `Recent problem pattern: ${profile.problemHistory[0].problemType} (${profile.problemHistory[0].topic})`
+      ? `Recent problem pattern: ${cap(profile.problemHistory[0].problemType ?? "")} (${cap(profile.problemHistory[0].topic ?? "")})`
       : "",
     profile.independenceLevel
-      ? `Independence level: ${profile.independenceLevel}`
+      ? `Independence level: ${cap(profile.independenceLevel)}`
       : "",
-    profile.lastReflection ? `Recent reflection: ${profile.lastReflection}` : "",
-    profile.pacingPreference ? `Pacing: ${profile.pacingPreference}` : "",
+    profile.lastReflection ? `Recent reflection: ${cap(profile.lastReflection)}` : "",
+    profile.pacingPreference ? `Pacing: ${cap(profile.pacingPreference)}` : "",
     profile.preferredTutoringStyle
-      ? `Preferred style: ${profile.preferredTutoringStyle}`
+      ? `Preferred style: ${cap(profile.preferredTutoringStyle)}`
       : "",
   ].filter(Boolean);
 
