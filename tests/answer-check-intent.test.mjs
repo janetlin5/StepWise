@@ -2,11 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
+const expression = {};
+new Function('exports', ts.transpileModule(fs.readFileSync('src/lib/answerExpression.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)(expression);
 const compiled = ts.transpileModule(fs.readFileSync('src/lib/answerCheckIntent.ts', 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS },
 }).outputText;
 const mod = { exports: {} };
-new Function('exports', compiled)(mod.exports);
+new Function('exports', 'require', compiled)(mod.exports, () => expression);
 const { hasAnswerCheckIntent, hasProposedNumericAnswer } = mod.exports;
 const coordinateJs = ts.transpileModule(fs.readFileSync('src/lib/coordinateGrading.ts', 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
@@ -49,4 +51,10 @@ test('client and tutor API accept short proposed answers through their attempt g
     assert.equal(gate('Is the slope -6?'), true, file);
     assert.equal(gate('Check my answer'), false, file);
   }
+});
+
+test('numeric answer framing is recognized without classifying a new problem as an answer', () => {
+  for (const input of ['is x = 6/2?', 'i think x = 3', 'I think that y = -1']) assert.equal(hasAnswerCheckIntent(input), true, input);
+  assert.equal(hasAnswerCheckIntent('x = 6/2', true), true);
+  for (const input of ['x = 6/2', 'y = 2x + 3', 'x = 3. Can we discuss factoring?', 'what is x = 3?', 'x = ?']) assert.equal(hasAnswerCheckIntent(input), false, input);
 });

@@ -1071,7 +1071,7 @@ function routeTutorIntent({
   if (
     requestedMode === "check_work" ||
     tutoringSignals.answerCheckSignal ||
-    hasAnswerCheckIntent(studentMessage) ||
+    hasAnswerCheckIntent(studentMessage, hasProblemContext) ||
     hasVerificationEquationSignal(studentMessage)
   ) {
     return {

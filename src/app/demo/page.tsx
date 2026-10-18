@@ -811,6 +811,8 @@ export default function DemoPage() {
     },
   ]);
   const [interactions, setInteractions] = useState(0);
+  const [accessStatus, setAccessStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [authRetry, setAuthRetry] = useState(0);
   const [attemptCount, setAttemptCount] = useState(0);
   const [incorrectAttempts, setIncorrectAttempts] = useState(0);
   const [learningProfile, setLearningProfile] = useState<LearningProfile>(
@@ -938,10 +940,20 @@ export default function DemoPage() {
   useEffect(() => {
     let active = true;
     let receivedAuthEvent = false;
+    setAccessStatus("loading");
+    const authTimeout = window.setTimeout(() => {
+      if (active && !receivedAuthEvent) setAccessStatus("error");
+    }, 10000);
     const applySession = (session: { user: { id: string }; access_token: string } | null) => {
       if (!active) return;
+      window.clearTimeout(authTimeout);
+      setAccessStatus("ready");
       const userId = session?.user.id ?? null;
       const previousUser = transcriptAuthRef.current;
+      if (previousUser !== userId) {
+        setServerLimitReached(false);
+        setServerLimitMessage("");
+      }
       transcriptAuthRef.current = userId;
       setIsLoggedIn(Boolean(session?.access_token));
       setCurrentUserId(userId);
@@ -983,10 +995,14 @@ export default function DemoPage() {
       applySession(session);
     });
     void supabase.auth.getSession().then(({ data, error }) => {
-      if (!error && !receivedAuthEvent) applySession(data.session);
-    }).catch(() => { /* Unknown auth state: do not read or overwrite anonymous storage. */ });
-    return () => { active = false; subscription.unsubscribe(); };
-  }, []);
+      if (!active || receivedAuthEvent) return;
+      if (error) setAccessStatus("error");
+      else applySession(data.session);
+    }).catch(() => {
+      if (active && !receivedAuthEvent) setAccessStatus("error");
+    });
+    return () => { active = false; window.clearTimeout(authTimeout); subscription.unsubscribe(); };
+  }, [authRetry]);
 
   useEffect(() => {
     if (!anonymousStorageReady || isLoggedIn || transcriptAuthRef.current !== null ||
@@ -1075,9 +1091,11 @@ export default function DemoPage() {
     };
   }
 
+  const accessReady = accessStatus === "ready";
   const reachedDemoLimit = interactions >= DEMO_LIMIT;
   const localDemoLocked = !isLoggedIn && reachedDemoLimit;
   const usageLimitReached = localDemoLocked || serverLimitReached;
+  const attachDisabled = !accessReady || usageLimitReached || isThinking || isTutorRequestPending || isExtracting;
   const needsReasoningPractice = incorrectAttempts >= 2;
   const hasActiveSession =
     interactions > 0 ||
@@ -1391,6 +1409,7 @@ export default function DemoPage() {
   }
 
   function canUseDemo() {
+    if (!accessReady) return false;
     if (serverLimitReached) {
       showServerLimitMessage(serverLimitMessage);
       return false;
@@ -2096,7 +2115,7 @@ export default function DemoPage() {
   }
 
   async function handleUploadedFile(file: File) {
-    if (!canUseDemo()) return;
+    if (!canUseDemo() || isThinking || isTutorRequestPending || isExtracting) return;
 
     setUploadedFile(file);
     setConfirmedUploadProblem(false);
@@ -2714,7 +2733,7 @@ export default function DemoPage() {
   }
 
   function handleCheck() {
-    if (tutorRequestLock.current || isTutorRequestPending || isThinking) return;
+    if (tutorRequestLock.current || isTutorRequestPending || isThinking || !canUseDemo()) return;
     const trimmedAttempt = attempt.trim();
 
     if (!trimmedAttempt) {
@@ -3146,7 +3165,7 @@ export default function DemoPage() {
               </p>
               <button
                 onClick={handleGenerateSimilarPractice}
-                disabled={isThinking || isTutorRequestPending || usageLimitReached}
+                disabled={!accessReady || isThinking || isTutorRequestPending || usageLimitReached}
                 className="text-xs font-semibold text-cyan-700 hover:text-cyan-800 disabled:text-slate-400"
               >
                 Edit
@@ -3158,7 +3177,7 @@ export default function DemoPage() {
                 <button
                   key={item.id}
                   onClick={() => handleQueuedPractice(item)}
-                  disabled={isThinking || isTutorRequestPending || usageLimitReached}
+                  disabled={!accessReady || isThinking || isTutorRequestPending || usageLimitReached}
                   className="w-full rounded-2xl bg-white px-3 py-3 text-left shadow-sm transition hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -3258,7 +3277,7 @@ export default function DemoPage() {
               <div className="flex justify-between text-slate-600">
                 <span>Steps completed</span>
                 <span className="font-semibold text-slate-900">
-                  {stepsCompleted}
+                  {accessReady ? stepsCompleted : "…"}
                 </span>
               </div>
               <div className="flex justify-between text-slate-600">
@@ -3283,7 +3302,7 @@ export default function DemoPage() {
                 <div className="flex justify-between text-slate-500">
                   <span>Demo used</span>
                   <span className="font-semibold text-slate-700">
-                    {interactions}/{DEMO_LIMIT}
+                    {accessReady ? `${interactions}/${DEMO_LIMIT}` : "…"}
                   </span>
                 </div>
               )}
@@ -3340,7 +3359,7 @@ export default function DemoPage() {
 
               <div className="min-h-[260px] flex-1 overflow-y-auto rounded-[1.5rem] bg-white/55 px-3 py-4 sm:px-5 sm:py-5 lg:min-h-0">
                 <div className="mx-auto max-w-3xl space-y-3.5">
-                  {!hasActiveSession && (
+                  {accessReady && !hasActiveSession && (
                     <div className="mx-auto max-w-2xl text-center">
                       <p className="text-sm font-semibold text-slate-700">
                         Ready to help you think through the next step.
@@ -3442,7 +3461,7 @@ export default function DemoPage() {
                     </div>
                   )}
 
-                  {!hasActiveSession && (
+                  {accessReady && !hasActiveSession && (
                     <div className="mx-auto max-w-2xl rounded-[1.5rem] bg-slate-50 px-5 py-3">
                       <p className="text-sm font-semibold text-slate-700">
                         Try asking
@@ -3492,7 +3511,7 @@ export default function DemoPage() {
                       <p className="text-lg font-semibold text-slate-950">
                         {serverLimitReached
                           ? "Your free tutoring limit is reached for now."
-                          : "Create a free account to continue your tutoring session."}
+                          : `You’ve used all ${DEMO_LIMIT} free demo interactions.`}
                       </p>
                       <p className="mt-2 text-sm leading-6 text-slate-500">
                         {serverLimitReached
@@ -3549,7 +3568,7 @@ export default function DemoPage() {
                         <button
                           key={hint.level}
                           onClick={() => handleHint(hint.level)}
-                          disabled={isThinking || isTutorRequestPending || usageLimitReached}
+                          disabled={!accessReady || isThinking || isTutorRequestPending || usageLimitReached}
                           className="rounded-full bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-cyan-50 hover:text-cyan-700 disabled:cursor-not-allowed disabled:text-slate-400"
                         >
                           {hint.label}
@@ -3559,13 +3578,24 @@ export default function DemoPage() {
                   </div>
                 )}
 
+                {accessStatus === "error" && (
+                  <p role="alert" className="px-2 text-sm text-amber-800">
+                    Couldn’t check your account. Your draft is safe. {" "}
+                    <button type="button" className="font-semibold underline" onClick={() => {
+                      setAccessStatus("loading");
+                      setAuthRetry((value) => value + 1);
+                    }}>Retry</button>
+                  </p>
+                )}
+
                 <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-slate-100 px-2 pt-2">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:bg-cyan-50 hover:text-cyan-700 hover:ring-cyan-100">
+                    <label aria-disabled={attachDisabled} className={`inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-3 py-1.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition ${attachDisabled ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-cyan-50 hover:text-cyan-700"}`}>
                       <input
                         className="sr-only"
                         type="file"
                         accept="image/*,.pdf"
+                        disabled={attachDisabled}
                         onChange={handleFileInput}
                       />
                       <span aria-hidden="true" className="text-base leading-none">
@@ -3585,7 +3615,9 @@ export default function DemoPage() {
                     )}
 
                     <p className="text-xs text-slate-500">
-                      {isLoggedIn
+                      {!accessReady
+                        ? accessStatus === "error" ? "Account check failed · Retry above" : "Checking account access…"
+                        : isLoggedIn
                         ? "Free account limits apply · Enter to send"
                         : `Free demo: ${interactions}/${DEMO_LIMIT} · Enter to send`}
                     </p>
@@ -3594,7 +3626,7 @@ export default function DemoPage() {
                   <div className="flex flex-wrap gap-1.5">
                     <button
                       onClick={() => setHintMenuOpen((isOpen) => !isOpen)}
-                      disabled={isThinking || isTutorRequestPending || usageLimitReached}
+                      disabled={!accessReady || isThinking || isTutorRequestPending || usageLimitReached}
                       className="rounded-full bg-cyan-50 px-3.5 py-1.5 text-sm font-semibold text-cyan-800 transition hover:-translate-y-0.5 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:text-slate-400"
                     >
                       Hints
@@ -3602,7 +3634,7 @@ export default function DemoPage() {
 
                     <button
                       onClick={handleCheck}
-                      disabled={isThinking || isTutorRequestPending || usageLimitReached}
+                      disabled={!accessReady || isThinking || isTutorRequestPending || usageLimitReached}
                       className="rounded-full bg-slate-950 px-3.5 py-1.5 text-sm font-semibold text-white shadow-sm shadow-slate-200 transition hover:-translate-y-0.5 hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
                     >
                       Check Reasoning
@@ -3610,7 +3642,7 @@ export default function DemoPage() {
 
                     <button
                       onClick={handleGenerateSimilarPractice}
-                      disabled={isThinking || isTutorRequestPending || usageLimitReached}
+                      disabled={!accessReady || isThinking || isTutorRequestPending || usageLimitReached}
                       className="rounded-full bg-white px-3.5 py-1.5 text-sm font-semibold text-slate-500 ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:bg-slate-50 hover:text-cyan-700 disabled:cursor-not-allowed disabled:text-slate-400"
                     >
                       Practice
@@ -3618,7 +3650,7 @@ export default function DemoPage() {
 
                     <button
                       onClick={handleSendMessage}
-                      disabled={isThinking || isTutorRequestPending || usageLimitReached || !attempt.trim()}
+                      disabled={!accessReady || isThinking || isTutorRequestPending || usageLimitReached || !attempt.trim()}
                       className="rounded-full bg-cyan-500 px-3.5 py-1.5 text-sm font-semibold text-white shadow-sm shadow-cyan-100 transition hover:-translate-y-0.5 hover:bg-cyan-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
                     >
                       Send
@@ -4094,7 +4126,7 @@ export default function DemoPage() {
 
               <button
                 onClick={handlePracticeGenerate}
-                disabled={isThinking || isTutorRequestPending || usageLimitReached}
+                disabled={!accessReady || isThinking || isTutorRequestPending || usageLimitReached}
                 className="rounded-full bg-cyan-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-cyan-100 hover:bg-cyan-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
               >
                 {practiceState === "starter"

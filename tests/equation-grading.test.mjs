@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
+const expression = {};
+new Function('exports', ts.transpileModule(fs.readFileSync('src/lib/answerExpression.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)(expression);
 const js = ts.transpileModule(fs.readFileSync('src/lib/equationGrading.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
 const mod = {};
-new Function('exports', js)(mod);
+new Function('exports', 'require', js)(mod, () => expression);
 const { equationsEquivalent: eq, submittedEquation, evaluateEquationAnswer } = mod;
 
 test('accepts exact decimal/fraction equivalence for the reported ellipse', () => {
@@ -48,4 +50,13 @@ test('isolated solver cannot override server comparison with an incorrect verdic
   assert.equal((await evaluateEquationAnswer({ openai, problem, studentMessage: '(1/18)x^2+.05y^2=1' })).verdict, 'incorrect');
   assert.deepEqual(requests[0], requests[1]);
   assert.ok(!JSON.stringify(requests).includes('.5y'));
+});
+
+test('wrapped numeric answers use exact grading and preserve sign errors', async () => {
+  const openai = { chat: { completions: { create: async () => ({ choices: [{ message: { content: JSON.stringify({ answerType: 'equation', expected: 'x=3' }) } }] }) } } };
+  for (const studentMessage of ['is x = 6/2?', 'i think x = 3', 'I think that x=3', 'my answer is:x=3']) {
+    assert.equal((await evaluateEquationAnswer({ openai, problem: 'Solve 2x=6', studentMessage })).verdict, 'correct', studentMessage);
+  }
+  assert.equal((await evaluateEquationAnswer({ openai, problem: 'Solve 2x=6', studentMessage: 'is x = -3?' })).verdict, 'incorrect');
+  assert.equal(submittedEquation('x=3. Can we discuss factoring?'), null);
 });

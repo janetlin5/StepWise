@@ -1,3 +1,4 @@
+import { normalizeAnswerExpression } from "./answerExpression";
 import type OpenAI from "openai";
 import type { CoordinateEvaluation } from "./coordinateGrading";
 
@@ -108,7 +109,7 @@ function parseEquation(text: string): Poly {
 }
 
 export function submittedEquation(text: string): string | null {
-  const s = text.trim().replace(/^(?:is this(?: right)?|is (?:the|my) (?:answer|equation)|my answer is|i got|check (?:my )?(?:answer|equation))\s*:?\s*/i, '').replace(/\s*(?:correct|right)?\?\s*$/i, '').trim();
+  const s = normalizeAnswerExpression(text);
   try { parseEquation(s); return s; } catch { return null; }
 }
 
