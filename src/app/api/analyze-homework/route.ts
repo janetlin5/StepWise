@@ -1,3 +1,4 @@
+import { authorizeSession, updateOwnedSession } from "@/lib/sessionOwnership";
 import { ApiInputError, readJsonObject, requireTextWithinLimit, validateLearningProfile } from "@/lib/apiSecurity";
 import { evaluateEquationAnswer, submittedEquation, equationTarget } from "@/lib/equationGrading";
 import { evaluateCoordinateAnswer, isCoordinateCheck, coordinateTarget, ambiguousCoordinate } from "@/lib/coordinateGrading";
@@ -296,7 +297,7 @@ export async function POST(request: Request) {
     // Same runtime role validation as demo-help: injected system entries
     // must never reach the model.
     const conversationHistory = sanitizeConversationHistory(body.conversationHistory);
-    const sessionId = body.sessionId?.trim() || crypto.randomUUID();
+    let sessionId = body.sessionId?.trim() || crypto.randomUUID();
     const answerCheckIntent = hasAnswerCheckIntent(targetPrompt) || submittedEquation(targetPrompt) !== null;
     const coordinateCheck = mode === "targeted_tutoring" && answerCheckIntent && isCoordinateCheck(targetPrompt);
     const equationCheck = mode === "targeted_tutoring" && answerCheckIntent && submittedEquation(targetPrompt) !== null;
@@ -352,6 +353,10 @@ export async function POST(request: Request) {
     }
 
     mark("authentication_and_usage");
+    if (user) {
+      sessionId = await authorizeSession(createSupabaseServerClient(accessToken), sessionId, user.id);
+    }
+
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
       timeout: 45000,
@@ -660,7 +665,7 @@ async function persistWorksheetContext({
     updatedAt: now,
   });
 
-  await supabase.from("learning_sessions").upsert(
+  await updateOwnedSession(supabase, "learning_sessions", sessionId, userId,
     {
       id: sessionId,
       user_id: userId,
@@ -690,8 +695,7 @@ async function persistWorksheetContext({
       },
       last_message_at: now,
       updated_at: now,
-    },
-    { onConflict: "id" }
+    }
   );
 }
 

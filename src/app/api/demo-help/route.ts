@@ -1,3 +1,4 @@
+import { authorizeSession } from "@/lib/sessionOwnership";
 import { ApiInputError, readJsonObject, requireTextWithinLimit, validateLearningProfile, sanitizeTutoringSignals } from "@/lib/apiSecurity";
 import { evaluateEquationAnswer } from "@/lib/equationGrading";
 import { evaluateCoordinateAnswer, isCoordinateCheck } from "@/lib/coordinateGrading";
@@ -513,6 +514,10 @@ export async function POST(request: Request) {
       );
     }
 
+    if (user) {
+      activeSessionId = await authorizeSession(createSupabaseServerClient(accessToken), activeSessionId, user.id);
+    }
+
     mark("usage_check");
     if (user && activeSessionId && !worksheetContext) {
       try {
@@ -569,7 +574,7 @@ export async function POST(request: Request) {
         ensureLearningSession({
           userId: user.id,
           accessToken,
-          sessionId: activeSessionId,
+          sessionId: activeSessionId!,
           problem,
           studentMessage,
           mode,
@@ -597,8 +602,8 @@ export async function POST(request: Request) {
         ),
       ]);
 
-      if (sessionOutcome.ok) {
-        activeSessionId = sessionOutcome.sessionId;
+      if (!sessionOutcome.ok) {
+        throw new ApiInputError("Unable to prepare this session. Please try again.", 503);
       }
 
       if (memoryOutcome.ok) {
@@ -670,7 +675,7 @@ export async function POST(request: Request) {
       const memoryWrite = recordLearningMemoryEvent({
         userId: user.id,
         accessToken,
-        sessionId: activeSessionId,
+        sessionId: activeSessionId!,
         profile: learningProfile,
         mode,
         problem,

@@ -1,3 +1,4 @@
+import { updateOwnedSession } from "@/lib/sessionOwnership";
 import type { LearningProfile } from "@/lib/learningProfile";
 import { createDefaultLearningProfile } from "@/lib/learningProfile";
 import { createSupabaseServerClient } from "@/lib/usageLimits";
@@ -12,7 +13,7 @@ type ConversationMessage = {
 type LearningMemoryInput = {
   userId: string;
   accessToken: string | null;
-  sessionId?: string;
+  sessionId: string;
   profile: Partial<LearningProfile>;
   mode: MemoryMode;
   problem: string;
@@ -28,7 +29,7 @@ type LearningMemoryInput = {
 type LearningSessionInput = {
   userId: string;
   accessToken: string | null;
-  sessionId?: string;
+  sessionId: string;
   problem: string;
   studentMessage: string;
   mode: MemoryMode;
@@ -78,12 +79,12 @@ const defaultProfile = createDefaultLearningProfile();
 
 export async function ensureLearningSession(input: LearningSessionInput) {
   const supabase = createSupabaseServerClient(input.accessToken);
-  const sessionId = input.sessionId || crypto.randomUUID();
+  const sessionId = input.sessionId;
   const topic = identifyCurrentTopic(`${input.problem}\n${input.studentMessage}`);
   const now = new Date().toISOString();
 
   await Promise.all([
-    supabase.from("learning_sessions").upsert(
+    updateOwnedSession(supabase, "learning_sessions", sessionId, input.userId,
       {
         id: sessionId,
         user_id: input.userId,
@@ -99,10 +100,9 @@ export async function ensureLearningSession(input: LearningSessionInput) {
           recentMessages: input.conversationHistory?.slice(-4) ?? [],
         },
         updated_at: now,
-      },
-      { onConflict: "id" }
+      }
     ),
-    supabase.from("sessions").upsert(
+    updateOwnedSession(supabase, "sessions", sessionId, input.userId,
       {
         id: sessionId,
         user_id: input.userId,
@@ -112,8 +112,7 @@ export async function ensureLearningSession(input: LearningSessionInput) {
         hints_used: input.profile.problemHistory?.[0]?.hintsUsed ?? 0,
         completion_status: "active",
         updated_at: now,
-      },
-      { onConflict: "id" }
+      }
     ),
   ]);
 
@@ -450,7 +449,7 @@ export async function recordLearningMemoryEvent(input: LearningMemoryInput) {
     ],
     8
   );
-  const sessionId = input.sessionId || crypto.randomUUID();
+  const sessionId = input.sessionId;
   const completed =
     input.tutoringState === "COMPLETION" ||
     /solved|finished|done|got it|final answer|therefore/i.test(input.studentMessage);
@@ -489,7 +488,7 @@ export async function recordLearningMemoryEvent(input: LearningMemoryInput) {
     { onConflict: "user_id" }
   );
 
-  await supabase.from("learning_sessions").upsert(
+  await updateOwnedSession(supabase, "learning_sessions", sessionId, input.userId,
     {
       id: sessionId,
       user_id: input.userId,
@@ -509,11 +508,10 @@ export async function recordLearningMemoryEvent(input: LearningMemoryInput) {
       ended_at: completed ? now : null,
       completed_at: completed ? now : null,
       updated_at: now,
-    },
-    { onConflict: "id" }
+    }
   );
 
-  await supabase.from("sessions").upsert(
+  await updateOwnedSession(supabase, "sessions", sessionId, input.userId,
     {
       id: sessionId,
       user_id: input.userId,
@@ -523,8 +521,7 @@ export async function recordLearningMemoryEvent(input: LearningMemoryInput) {
       hints_used: input.profile.problemHistory?.[0]?.hintsUsed ?? 0,
       completion_status: completed ? "completed" : "active",
       updated_at: now,
-    },
-    { onConflict: "id" }
+    }
   );
 
   await supabase.from("learning_signals").insert(
