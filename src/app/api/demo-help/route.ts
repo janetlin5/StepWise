@@ -347,6 +347,10 @@ export async function POST(request: Request) {
   };
   try {
     const body = (await request.json()) as DemoHelpRequest;
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+      (body.message !== undefined && typeof body.message !== "string")) {
+      return NextResponse.json({ message: "Please provide a text message." }, { status: 400 });
+    }
     const requestedMode = body.mode ?? "general";
 
     if (!modeInstructions[requestedMode]) {
@@ -357,6 +361,22 @@ export async function POST(request: Request) {
     }
 
     const studentMessage = body.message?.trim() || "No student message provided.";
+
+    // Bound the live message size: other context fields have separate limits.
+    // History entries are truncated downstream,
+    // but the live message itself is not. Reject oversized input instead of
+    // silently truncating, so grading never runs on half a message.
+    const MAX_STUDENT_MESSAGE_CHARS = 4000;
+    if (studentMessage.length > MAX_STUDENT_MESSAGE_CHARS) {
+      return NextResponse.json(
+        {
+          message:
+            "That message is too long \u2014 try breaking it into smaller steps.",
+        },
+        { status: 400 }
+      );
+    }
+
     const rawProblemContext = [body.problem, body.currentProblem]
       .filter(Boolean)
       .filter(

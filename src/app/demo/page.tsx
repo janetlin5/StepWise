@@ -193,9 +193,16 @@ function getAnonymousDemoUsageFromCookie() {
   if (!rawCookie) return 0;
 
   try {
-    const parsed = JSON.parse(
-      decodeURIComponent(rawCookie.slice(anonymousDemoUsageCookie.length + 1))
-    ) as { used?: number };
+    const rawValue = decodeURIComponent(
+      rawCookie.slice(anonymousDemoUsageCookie.length + 1)
+    );
+    // Signed format is "<json>.<signature>"; the server verifies the
+    // signature, the client only needs the JSON payload for the counter.
+    const signatureBoundary = rawValue.lastIndexOf("}.");
+    const payload = signatureBoundary >= 0
+      ? rawValue.slice(0, signatureBoundary + 1)
+      : rawValue;
+    const parsed = JSON.parse(payload) as { used?: number };
     const used = Number(parsed.used);
 
     if (!Number.isFinite(used) || used < 0) return 0;
