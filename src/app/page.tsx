@@ -150,7 +150,7 @@ export default function Home() {
         <div className="mx-auto mt-9 max-w-5xl stepwise-fade-in stepwise-delay-1">
           <div className="rounded-[2rem] bg-white p-3 text-left shadow-2xl shadow-slate-200/80 ring-1 ring-slate-200/80">
             <div className="grid gap-3 lg:grid-cols-[0.9fr_1.1fr]">
-              <div className="rounded-[1.5rem] bg-slate-50 p-4">
+              <Link href="/demo" aria-label="Start tutoring: paste a problem or attach homework" className="block rounded-[1.5rem] bg-slate-50 p-4 transition hover:bg-cyan-50 focus-visible:outline-2 focus-visible:outline-cyan-600">
                 <p className="text-xs font-semibold uppercase text-slate-400">
                   Start here
                 </p>
@@ -180,7 +180,7 @@ export default function Home() {
                     </span>
                   ))}
                 </div>
-              </div>
+              </Link>
 
               <div className="rounded-[1.5rem] bg-[#f6f9fc] p-4">
                 <div className="flex items-center justify-between">
