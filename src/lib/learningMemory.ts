@@ -450,9 +450,7 @@ export async function recordLearningMemoryEvent(input: LearningMemoryInput) {
     8
   );
   const sessionId = input.sessionId;
-  const completed =
-    input.tutoringState === "COMPLETION" ||
-    /solved|finished|done|got it|final answer|therefore/i.test(input.studentMessage);
+  const completed = input.tutoringState === "COMPLETION";
   const now = new Date().toISOString();
   const evidenceCount = getEvidenceCount(input.profile) + 1;
   const confidenceByTopic = buildConfidenceByTopic(input.profile, topic, completed);

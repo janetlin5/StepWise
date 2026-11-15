@@ -78,6 +78,7 @@ export type LearningProfileUpdate = {
   incorrectAttempts?: number;
   hintRequests?: number;
   completedProblem?: boolean;
+  answerVerdict?: "correct" | "partially_correct" | "incorrect" | "ambiguous";
   mistakePatterns?: string[];
   tutoringState?: string;
 };
@@ -157,11 +158,9 @@ export function updateLearningProfile(
     /i don't know|idk|stuck|confused|lost|not sure/i.test(
       update.studentMessage ?? ""
     );
-  const completedProblem =
-    update.completedProblem ||
-    /solved|finished|done|got it|answer is|final answer|therefore/i.test(
-      update.studentMessage ?? ""
-    );
+  // Completion is supplied by the evaluated outcome, never by a claim in the prompt.
+  const completedProblem = update.completedProblem === true;
+  const verifiedCorrect = update.answerVerdict === "correct";
   const currentText = [
     update.problemText,
     update.uploadedContext,
@@ -178,7 +177,7 @@ export function updateLearningProfile(
     update.mistakePatterns ?? []
   );
   const nextStrongSkills =
-    completedProblem || (!repeatedHelpSignals && update.mode === "check_work")
+    completedProblem || (!repeatedHelpSignals && verifiedCorrect)
       ? uniqueLimited([...skills.slice(0, 2), ...profile.strongSkills], 5)
       : profile.strongSkills;
   const nextPacingPreference = repeatedHelpSignals
@@ -188,7 +187,7 @@ export function updateLearningProfile(
       : profile.pacingPreference;
   const nextReasoningQuality = repeatedHelpSignals
     ? "emerging"
-    : completedProblem || update.mode === "check_work"
+    : completedProblem || verifiedCorrect
       ? "strong"
       : profile.reasoningQuality;
   const nextIndependenceLevel = repeatedHelpSignals

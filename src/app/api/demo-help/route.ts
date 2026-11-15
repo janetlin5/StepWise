@@ -554,7 +554,7 @@ export async function POST(request: Request) {
       ),
     });
     const mode = routedIntent.effectiveMode;
-    const problem =
+    let problem =
       referencedWorksheetProblem?.extractedText ||
       currentProblemField ||
       problemField ||
@@ -654,6 +654,7 @@ export async function POST(request: Request) {
     });
 
     let answerEvaluation: AnswerEvaluation | null = null;
+    let evaluatedCompletion = false;
 
     // Persists usage, learning memory, and the conversation thread for
     // signed-in users. Takes the COMPLETE assistant message, so the streaming
@@ -683,7 +684,7 @@ export async function POST(request: Request) {
         assistantMessage: finalMessage,
         topic: learningProfile.currentSubject,
         skills: learningProfile.recentConcepts?.slice(0, 5),
-        tutoringState,
+        tutoringState: evaluatedCompletion ? "COMPLETION" : "GUIDED",
         mistakePatterns,
         conversationHistory,
       }).catch((error: unknown) => {
@@ -762,18 +763,19 @@ export async function POST(request: Request) {
           const existingMetadata = toPlainObject(existingSession?.metadata);
           const existingWorksheetContext =
             getStoredWorksheetContext(existingSession);
-          const activeWorksheetContext =
-            worksheetContext ?? existingWorksheetContext ?? undefined;
+          const activeWorksheetContext = mode === "generate_practice"
+            ? null
+            : worksheetContext ?? existingWorksheetContext ?? null;
           const { error: threadUpdateError } = await supabase
             .from("learning_sessions")
             .update({
+              current_problem: problem,
+              pinned_problem: problem,
               tutor_thread: {
                 ...existingTutorThread,
                 source: "demo_help",
                 messages: savedThreadMessages,
-                ...(activeWorksheetContext
-                  ? { worksheetContext: activeWorksheetContext }
-                  : {}),
+                worksheetContext: activeWorksheetContext,
               },
               metadata: {
                 ...existingMetadata,
@@ -781,9 +783,7 @@ export async function POST(request: Request) {
                 tutorMode: routedIntent.mode,
                 routingReason: routedIntent.reason,
                 recentMessages: savedThreadMessages,
-                ...(activeWorksheetContext
-                  ? { worksheetContext: activeWorksheetContext }
-                  : {}),
+                worksheetContext: activeWorksheetContext,
               },
               updated_at: new Date().toISOString(),
             })
@@ -805,6 +805,37 @@ export async function POST(request: Request) {
       if (!saved) throw new Error("Tutor response persistence failed");
     };
 
+    if (mode === "generate_practice") {
+      // Keep the question separate from tutoring prose: all later checks use
+      // this exact problem, including after restoring a saved session.
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
+        response_format: { type: "json_object" },
+        temperature: 0.55,
+        max_completion_tokens: 700,
+        messages: [
+          { role: "system", content: "Generate one self-contained tutoring practice question. Return JSON only with currentProblem (the complete question, all givens and constraints, no solution) and firstStepQuestion (one short question helping the student start, without revealing the answer). Do not grade the request. Use Markdown math where useful." },
+          { role: "user", content: JSON.stringify({ topic: practiceTopic, difficulty: practiceDifficulty, style: practiceType, sourceProblem: problem, request: studentMessage }) },
+        ],
+      });
+      if (completion.choices[0]?.finish_reason !== "stop") throw new Error("Incomplete practice generation");
+      const generated: unknown = JSON.parse(completion.choices[0]?.message.content ?? "");
+      if (!generated || typeof generated !== "object") throw new Error("Invalid practice response");
+      const practice = generated as Record<string, unknown>;
+      if (typeof practice.currentProblem !== "string" || !practice.currentProblem.trim() ||
+          typeof practice.firstStepQuestion !== "string" || !practice.firstStepQuestion.trim()) {
+        throw new Error("Missing practice question");
+      }
+      problem = requireTextWithinLimit(practice.currentProblem.trim(), 4000);
+      const message = `${problem}\n\n${requireTextWithinLimit(practice.firstStepQuestion.trim(), 1000)}`;
+      await persistTutorResponse(message).catch(() => {});
+      const practiceResponse = NextResponse.json({
+        message, currentProblem: problem, sessionId: activeSessionId,
+        anonymousUsage: anonymousUsage ? { used: anonymousUsage.used + 1, limit: anonymousUsage.limit } : undefined,
+      });
+      return anonymousUsage ? addAnonymousDemoUsageCookie(practiceResponse, anonymousUsage.used + 1) : practiceResponse;
+    }
+
     if (answerCheckIntent) {
       let message: string;
       if (!submittedAnswerSignal) {
@@ -823,6 +854,7 @@ export async function POST(request: Request) {
           mathSignNotes,
           conversationHistory,
         });
+        evaluatedCompletion = answerEvaluation.verdict === "correct" && /(?:^|[\s,;])(?:[a-z]\s*=\s*-?\d+(?:\.\d+)?(?:\s*\/\s*\d+)?)[.!]?\s*$/i.test(studentMessage);
         message = buildAnswerEvaluationMessage(answerEvaluation, {
           includeExplanation: asksForAnswerExplanation(studentMessage),
         });
@@ -836,6 +868,7 @@ export async function POST(request: Request) {
       await persistTutorResponse(message).catch(() => {});
       const answerResponseBody = {
         message,
+        answerEvaluation: answerEvaluation ? { verdict: answerEvaluation.verdict, completedProblem: evaluatedCompletion } : undefined,
         sessionId: activeSessionId,
         anonymousUsage: anonymousUsage
           ? {
@@ -1402,7 +1435,8 @@ Validation rules:
 - For parabola/conic problems, verify vertex location, orientation, standard form, p value, 4p value, coefficient sign, and algebra consistency.
 - Preserve minus signs exactly. If the student wrote = -6(...), that is negative six.
 - Do not change verdict midstream. If the problem or answer is not clear enough, use ambiguous.
-- Explanation must be one concise sentence that supports the verdict.
+- Explanation must be one concise sentence that supports the verdict. Address the learner directly as "you".
+- nextAction must be a short, actionable hint addressed to the learner, never instructions to a teacher (for example, never "guide the student" or "clarify the original problem"). Identify the actual operation or arithmetic mistake; do not blame coefficients when the error is subtraction.
 - correctPieces and incorrectPieces should be short phrases, not full derivations.
 `,
       },
@@ -1491,9 +1525,11 @@ function buildAnswerEvaluationMessage(
   evaluation: AnswerEvaluation,
   options: { includeExplanation?: boolean } = {}
 ) {
-  const explanation = ensureTerminalPunctuation(evaluation.explanation);
+  const internalCopy = /\b(?:the student|guide the|clarify the original|instruct the|ask the student)\b/i;
+  const explanation = ensureTerminalPunctuation(internalCopy.test(evaluation.explanation)
+    ? "Your work does not match the current problem yet" : evaluation.explanation);
   const nextAction = getShortNextAction(
-    evaluation.verdict === "correct" ? "" : evaluation.nextAction,
+    evaluation.verdict === "correct" || internalCopy.test(evaluation.nextAction) ? "" : evaluation.nextAction,
     (evaluation.verdict === "correct"
       ? "Any questions about this one, or ready to move on?"
       : "Want to adjust that piece?")
