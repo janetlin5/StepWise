@@ -23,7 +23,6 @@ import type { LearningProfile, ProblemSource } from "@/lib/learningProfile";
 import {
   deriveTutoringState,
   detectMistakePatterns,
-  getPacingGuidance,
 } from "@/lib/tutoringState";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -69,6 +68,8 @@ type HomeworkAnalysisResponse = {
 };
 
 type TutorHelpResponse = {
+  currentProblem?: string;
+  answerEvaluation?: { verdict: "correct" | "partially_correct" | "incorrect" | "ambiguous"; completedProblem: boolean };
   message?: string;
   anonymousUsage?: AnonymousUsagePayload;
   used?: number;
@@ -167,10 +168,10 @@ const anonymousDemoUsageCookie = "stepwise_demo_usage";
 const focusAreas = ["Problem setup", "Step-by-step reasoning", "Accuracy check"];
 
 const emptyStatePrompts = [
-  "Can you explain this step?",
-  "What formula should I use?",
-  "Can you check my reasoning?",
-  "Can you check my answer?",
+  "Help me solve 3x + 5 = 17. I think I should subtract 5 first.",
+  "Explain how to find the area of a triangle with base 8 and height 5.",
+  "Help me find the mean of 4, 7, 9, and 12.",
+  "Walk me through simplifying 2(x + 3) + x.",
 ];
 
 const emptyFocusHints = [
@@ -815,6 +816,7 @@ export default function DemoPage() {
   const [authRetry, setAuthRetry] = useState(0);
   const [attemptCount, setAttemptCount] = useState(0);
   const [incorrectAttempts, setIncorrectAttempts] = useState(0);
+  const [verifiedProblemComplete, setVerifiedProblemComplete] = useState(false);
   const [learningProfile, setLearningProfile] = useState<LearningProfile>(
     createDefaultLearningProfile
   );
@@ -1200,19 +1202,15 @@ export default function DemoPage() {
     learningProfile,
     tutoringSignals: currentTutoringSignals,
   });
-  const activePacingGuidance = getPacingGuidance({
-    state: activeTutoringState,
-    learningProfile,
-  });
-  const activePacingLabel = activePacingGuidance.includes("slow")
+  const activePacingLabel = learningProfile.pacingPreference === "slow"
     ? "Slow, guided pacing"
-    : activePacingGuidance.includes("independent")
+    : learningProfile.pacingPreference === "independent"
       ? "Independent pacing"
       : "Balanced pacing";
   const demonstratedUnderstandingSignal =
     attemptCount >= 2 && incorrectAttempts === 0 && interactions >= 2;
   const reachedLearningCheckpoint =
-    completionSignal || demonstratedUnderstandingSignal;
+    verifiedProblemComplete || demonstratedUnderstandingSignal;
   const suppressRecommendation =
     activeConfusionSignal ||
     isThinking || isTutorRequestPending ||
@@ -1287,8 +1285,8 @@ export default function DemoPage() {
     ? "Ready to adapt"
     : detectedFocus.subject;
   const reasoningChecksPassed = Math.max(0, attemptCount - incorrectAttempts);
-  const stepsCompleted = attemptCount + Math.max(0, interactions - hintRequests);
-  const skillsPracticed = waitingForProblem ? 0 : detectedFocus.skills.length;
+  const stepsCompleted = reasoningChecksPassed;
+  const skillsPracticed = waitingForProblem || attemptCount === 0 ? 0 : learningProfile.recentConcepts.length;
   const adaptiveMemoryMessage = (() => {
     if (learningProfile.lastReflection) return learningProfile.lastReflection;
     if (learningProfile.spacedReviewQueue[0]) {
@@ -1521,6 +1519,7 @@ export default function DemoPage() {
         content: message.content,
       }));
 
+      setVerifiedProblemComplete(false);
       setSessionId(data.session.id);
       const restoredProblem =
         data.session.pinned_problem ?? data.session.current_problem ?? "";
@@ -1568,6 +1567,7 @@ export default function DemoPage() {
   function startNewConversation() {
     try { clearAnonymousTranscript(window.sessionStorage); } catch { /* Storage unavailable. */ }
     setSessionId(crypto.randomUUID());
+    setVerifiedProblemComplete(false);
     setProblem("");
     setCurrentProblem("");
     setAttempt("");
@@ -1758,55 +1758,27 @@ export default function DemoPage() {
     mode: HelpMode,
     studentMessage: string,
     uploadedContext?: string,
-    assistantMessage?: string
+    assistantMessage?: string,
+    outcome?: TutorHelpResponse
   ) {
-    const eventFocus = uploadedContext ? detectFocus(uploadedContext) : detectedFocus;
+    const eventFocus = detectFocus(outcome?.currentProblem || uploadedContext || currentProblem || problem || studentMessage);
     const eventMistakes = detectMistakePatterns(
       `${currentProblem}\n${problem}\n${studentMessage}\n${uploadedContext ?? ""}\n${
         assistantMessage ?? ""
       }`
     );
-    const eventTutoringState = deriveTutoringState({
-      mode,
-      studentMessage,
-      learningProfile,
-      tutoringSignals: {
-        ...currentTutoringSignals,
-        activeConfusionSignal:
-          currentTutoringSignals.activeConfusionSignal ||
-          /i don't know|idk|stuck|confused|lost|not sure|don't get|no idea|help/i.test(
-            studentMessage
-          ),
-        completionSignal:
-          currentTutoringSignals.completionSignal ||
-          /solved|finished|done|got it|answer is|i got|final answer|therefore/i.test(
-            studentMessage
-          ) ||
-          /(?:so|therefore)\s+[a-z]\s*=/i.test(studentMessage),
-        fullAttemptSignal:
-          currentTutoringSignals.fullAttemptSignal ||
-          hasFullAttemptSignal(studentMessage),
-        answerCheckSignal:
-          currentTutoringSignals.answerCheckSignal ||
-          hasAnswerCheckIntent(studentMessage),
-        confidentAttemptSignal:
-          currentTutoringSignals.confidentAttemptSignal ||
-          /i got|i think|final answer|answer is|is this right|does this work/i.test(
-            studentMessage
-          ),
-      },
-    });
 
     setLearningProfile((currentProfile) =>
       updateLearningProfile(currentProfile, {
         subject: eventFocus.subject,
-        skills: learningRecommendation?.skills ?? eventFocus.skills,
+        skills: outcome?.currentProblem ? eventFocus.skills : learningRecommendation?.skills ?? eventFocus.skills,
         recommendation: shouldShowRecommendation ? learningRecommendation?.title : undefined,
         mode,
         studentMessage,
         uploadedContext,
         assistantMessage,
         problemText:
+          outcome?.currentProblem ||
           currentProblem.trim() ||
           problem.trim() ||
           uploadedContext?.trim() ||
@@ -1818,11 +1790,12 @@ export default function DemoPage() {
           selectedPracticeDifficulty === "Advanced"
             ? selectedPracticeDifficulty
             : "Intermediate",
-        incorrectAttempts,
+        incorrectAttempts: incorrectAttempts + (outcome?.answerEvaluation && ["incorrect", "partially_correct"].includes(outcome.answerEvaluation.verdict) ? 1 : 0),
         hintRequests,
-        completedProblem: eventTutoringState === "COMPLETION",
+        answerVerdict: outcome?.answerEvaluation?.verdict,
+        completedProblem: outcome?.answerEvaluation?.completedProblem === true,
         mistakePatterns: eventMistakes,
-        tutoringState: eventTutoringState,
+        tutoringState: outcome?.answerEvaluation?.completedProblem ? "COMPLETION" : outcome?.answerEvaluation?.verdict === "incorrect" ? "STRUGGLING" : "GUIDED",
       })
     );
   }
@@ -2518,8 +2491,8 @@ export default function DemoPage() {
     mode: HelpMode,
     studentMessage: string,
     options: PracticeOptions = {}
-  ) {
-    if (tutorRequestLock.current || isThinking || isTutorRequestPending || !canUseDemo()) return;
+  ): Promise<boolean> {
+    if (tutorRequestLock.current || isThinking || isTutorRequestPending || !canUseDemo()) return false;
 
     const referencedWorksheetProblem = resolveWorksheetProblemReference(
       studentMessage,
@@ -2651,7 +2624,7 @@ export default function DemoPage() {
         });
         if (isLoggedIn) void loadConversationHistory();
         setHintMenuOpen(false);
-        return;
+        return true;
       }
 
       const data = (await response.json()) as TutorHelpResponse;
@@ -2661,7 +2634,7 @@ export default function DemoPage() {
           setInteractions(Math.min(data.used, data.limit ?? DEMO_LIMIT));
         }
         showServerLimitMessage(data.message);
-        return;
+        return false;
       }
 
       if (!response.ok) {
@@ -2676,14 +2649,33 @@ export default function DemoPage() {
         setSessionId(data.sessionId);
       }
 
+      if (data.currentProblem) {
+        setVerifiedProblemComplete(false);
+        setCurrentProblem(data.currentProblem);
+        setProblem(data.currentProblem);
+        setActiveWorksheetContext(null);
+        setUploadedFile(null);
+        setUploadedFileDataUrl("");
+        setUploadPreviewUrl("");
+        setConfidenceCheckIn(null);
+      }
+      if (data.answerEvaluation) {
+        setVerifiedProblemComplete(data.answerEvaluation.completedProblem);
+      }
+      const verdict = data.answerEvaluation?.verdict;
+      if (verdict && verdict !== "ambiguous") {
+        setAttemptCount((count) => count + 1);
+        if (verdict !== "correct") setIncorrectAttempts((count) => count + 1);
+      }
       addMessage("assistant", tutorMessage);
-      rememberLearningEvent(mode, studentMessage, undefined, tutorMessage);
+      rememberLearningEvent(mode, studentMessage, undefined, tutorMessage, data);
       setLastTutorMode(mode);
       syncInteractionUsage(data);
       if (isLoggedIn) {
         void loadConversationHistory();
       }
       setHintMenuOpen(false);
+      return mode !== "generate_practice" || Boolean(data.currentProblem);
     } catch (error) {
       if (error instanceof TutorStreamError && !error.answerComplete) {
         setInterruptedRequest({ mode, studentMessage, options });
@@ -2696,6 +2688,7 @@ export default function DemoPage() {
           "I hit a temporary issue while generating the explanation. Try sending the message again."
         )
       );
+      return false;
     } finally {
       window.clearTimeout(thinkingTimer);
       tutorRequestLock.current = false;
@@ -2744,20 +2737,13 @@ export default function DemoPage() {
       return;
     }
 
-    const hasEnoughReasoning = trimmedAttempt.length >= 12;
-
     if (!currentProblem.trim() && problem.trim()) {
       setCurrentProblem(problem.trim());
     } else if (!currentProblem.trim()) {
       setCurrentProblem(trimmedAttempt);
     }
 
-    setAttemptCount((currentCount) => currentCount + 1);
     addMessage("user", trimmedAttempt);
-
-    if (!hasEnoughReasoning) {
-      setIncorrectAttempts((currentCount) => currentCount + 1);
-    }
 
     void requestTutorHelp("check_work", trimmedAttempt);
     setAttempt("");
@@ -2885,8 +2871,9 @@ export default function DemoPage() {
       practiceTopic: topic,
       practiceDifficulty: learningRecommendation.difficulty,
       practiceType: learningRecommendation.style,
-    }).finally(() => {
-      setCheckpointPracticeState("practice_started");
+    }).then((started) => {
+      setCheckpointPracticeState(started ? "practice_started" : "available");
+      if (!started) setUsedCheckpointKey("");
     });
   }
 
@@ -2996,9 +2983,6 @@ export default function DemoPage() {
       ((Boolean(currentProblem.trim()) || Boolean(problem.trim())) &&
         hasFullAttemptSignal(trimmedAttempt));
 
-    if (shouldCheckAnswer) {
-      setAttemptCount((currentCount) => currentCount + 1);
-    }
 
     void requestTutorHelp(
       shouldCheckAnswer ? "check_work" : "general",
@@ -3110,16 +3094,14 @@ export default function DemoPage() {
                 </div>
               )}
 
-              {!waitingForProblem && (
+              {!waitingForProblem && attemptCount >= 2 && (
                 <div className="mt-3 grid gap-2 text-xs">
                   <div className="rounded-2xl bg-white px-3 py-2 shadow-sm">
                     <span className="font-semibold text-slate-700">
-                      Tutoring state
+                      Learning support
                     </span>
                     <p className="mt-0.5 text-slate-500">
-                      {activeTutoringState
-                        .toLowerCase()
-                        .replace("_", " ")}
+                      Adapting to your checked work
                     </p>
                   </div>
                   <div className="rounded-2xl bg-white px-3 py-2 shadow-sm">
@@ -3275,7 +3257,7 @@ export default function DemoPage() {
             </p>
             <div className="mt-3 space-y-2 rounded-3xl bg-slate-50 p-4 text-sm">
               <div className="flex justify-between text-slate-600">
-                <span>Steps completed</span>
+                <span>Correct checks</span>
                 <span className="font-semibold text-slate-900">
                   {accessReady ? stepsCompleted : "…"}
                 </span>
@@ -3287,7 +3269,7 @@ export default function DemoPage() {
                 </span>
               </div>
               <div className="flex justify-between text-slate-600">
-                <span>Skills practiced</span>
+                <span>Topics explored</span>
                 <span className="font-semibold text-slate-900">
                   {skillsPracticed}
                 </span>
@@ -3464,7 +3446,7 @@ export default function DemoPage() {
                   {accessReady && !hasActiveSession && (
                     <div className="mx-auto max-w-2xl rounded-[1.5rem] bg-slate-50 px-5 py-3">
                       <p className="text-sm font-semibold text-slate-700">
-                        Try asking
+                        Try a sample problem
                       </p>
                       <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
                         {emptyStatePrompts.map((prompt) => (
@@ -3517,7 +3499,7 @@ export default function DemoPage() {
                         {serverLimitReached
                           ? serverLimitMessage ||
                             "Come back later or create an account to keep your tutoring memory."
-                          : "Save homework, upload files, track progress, and keep learning step by step."}
+                          : "Create a free account to continue. Each tutor reply, including a generated practice question, uses one demo interaction."}
                       </p>
                       <Link
                         href="/login"
@@ -3619,7 +3601,7 @@ export default function DemoPage() {
                         ? accessStatus === "error" ? "Account check failed · Retry above" : "Checking account access…"
                         : isLoggedIn
                         ? "Free account limits apply · Enter to send"
-                        : `Free demo: ${interactions}/${DEMO_LIMIT} · Enter to send`}
+                        : `Free demo: ${Math.max(0, DEMO_LIMIT - interactions)} responses left · Each reply uses 1 · Enter to send`}
                     </p>
                   </div>
 

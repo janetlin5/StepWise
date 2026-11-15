@@ -165,6 +165,19 @@ export async function evaluateEquationAnswer({ openai, problem, studentMessage }
     if (result.answerType !== 'equation' || typeof result.expected !== 'string') return ambiguous();
     const equivalent = equationsEquivalent(result.expected, submitted);
     if (equivalent === null) return ambiguous();
+    // For a simple isolation step, point to the arithmetic that changed the
+    // constant rather than suggesting a coefficient error.
+    const linear = result.expected.replace(/\s+/g, '').match(/^(-?\d*)([a-z])([+-]\d+)=(-?\d+)$/i);
+    const step = submitted.replace(/\s+/g, '').match(/^(-?\d*)([a-z])=(-?\d+)$/i);
+    if (!equivalent && linear && step && linear[1] === step[1] && linear[2] === step[2]) {
+      const constant = Number(linear[3]);
+      const right = Number(linear[4]);
+      const operation = constant >= 0 ? 'subtract' : 'add';
+      return { verdict: 'incorrect', confidence: 1,
+        explanation: `You kept the variable term, but the number on the other side needs another look.`,
+        correctPieces: ['Variable term'], incorrectPieces: ['Arithmetic on the right-hand side'],
+        nextAction: `What is ${right} ${constant >= 0 ? '−' : '+'} ${Math.abs(constant)} when you ${operation} ${Math.abs(constant)} on both sides?` };
+    }
     return { verdict: equivalent ? 'correct' : 'incorrect',
       explanation: equivalent ? 'Your equation is mathematically equivalent; decimal coefficients and fractions can express the same values.' : 'The equation does not match the expected relation. Check the coefficients and signs.',
       correctPieces: equivalent ? ['Equivalent equation'] : [], incorrectPieces: equivalent ? [] : ['Equation coefficients or signs'],
