@@ -4,6 +4,7 @@ import { readAnonymousTranscript, writeAnonymousTranscript, clearAnonymousTransc
 import { getHomeworkReadingRegions, getHomeworkImageSize } from "@/lib/homeworkImage";
 import { hasAnswerCheckIntent, hasProposedNumericAnswer } from "@/lib/answerCheckIntent";
 import Link from "next/link";
+import { buildResponseReport } from "@/lib/responseFeedback";
 import { readTutorStream, TutorStreamError } from "@/lib/tutorStreamClient";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
@@ -27,6 +28,7 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 
 type Message = {
+  problem?: string;
   id: number;
   role: "user" | "assistant";
   content: string;
@@ -1383,13 +1385,14 @@ export default function DemoPage() {
     void loadConversationHistory();
   }, [currentUserId]);
 
-  function addMessage(role: Message["role"], content: string) {
+  function addMessage(role: Message["role"], content: string, messageProblem = currentProblem || problem) {
     setMessages((currentMessages) => [
       ...currentMessages,
       {
         id: Date.now() + currentMessages.length,
         role,
         content,
+        ...(role === "assistant" ? { problem: messageProblem } : {}),
       },
     ]);
   }
@@ -2599,7 +2602,7 @@ export default function DemoPage() {
           if (streamedMessageId === null) {
             streamedMessageId = Date.now();
             setStreamingMessageId(streamedMessageId);
-            setMessages((current) => [...current, { id: streamedMessageId!, role: "assistant", content }]);
+            setMessages((current) => [...current, { id: streamedMessageId!, role: "assistant", content, problem: effectiveCurrentProblem }]);
           } else {
             const id = streamedMessageId;
             setMessages((current) => current.map((message) => message.id === id ? { ...message, content } : message));
@@ -2667,7 +2670,7 @@ export default function DemoPage() {
         setAttemptCount((count) => count + 1);
         if (verdict !== "correct") setIncorrectAttempts((count) => count + 1);
       }
-      addMessage("assistant", tutorMessage);
+      addMessage("assistant", tutorMessage, data.currentProblem || effectiveCurrentProblem);
       rememberLearningEvent(mode, studentMessage, undefined, tutorMessage, data);
       setLastTutorMode(mode);
       syncInteractionUsage(data);
@@ -3383,6 +3386,14 @@ export default function DemoPage() {
                         <p className="whitespace-pre-wrap">{message.content}</p>
                       ) : (
                         <MathMessage content={message.content} />
+                      )}
+                      {message.role === "assistant" && message.id !== 1 && message.id !== streamingMessageId && (
+                        <button type="button" className="mt-3 block min-h-11 text-xs font-semibold text-slate-500 hover:text-cyan-800 focus-visible:outline-2 focus-visible:outline-cyan-600"
+                          onClick={() => window.dispatchEvent(new CustomEvent("stepwise:open-feedback", {
+                            detail: buildResponseReport(messages, message.id, sessionId),
+                          }))}>
+                          Report this response
+                        </button>
                       )}
                     </div>
                   </div>
