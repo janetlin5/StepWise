@@ -1,3 +1,4 @@
+import { sanitizeResponseReport } from "@/lib/responseFeedback";
 import { ApiInputError, readJsonObject } from "@/lib/apiSecurity";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
@@ -69,6 +70,10 @@ export async function POST(request: Request) {
       );
     }
 
+    const isResponseReport = body.context?.kind === "tutor_response";
+    const responseReport = isResponseReport ? sanitizeResponseReport(body.context) : null;
+    if (isResponseReport && !responseReport) throw new ApiInputError("Choose a tutor response to report.", 400);
+
     const accessToken = getBearerToken(request);
     const user = await getAuthenticatedUser(accessToken);
     const supabase = createFeedbackClient(accessToken);
@@ -79,7 +84,9 @@ export async function POST(request: Request) {
       page_url: body.pageUrl?.slice(0, 500) ?? "",
       // Diagnostic blobs are client-controlled: deep-truncate them so one
       // request cannot store an unbounded JSON payload.
-      context: truncateJsonValue(body.context ?? {}),
+      context: isResponseReport
+        ? responseReport
+        : truncateJsonValue(body.context ?? {}),
       browser: truncateJsonValue(body.browser ?? {}),
     });
 

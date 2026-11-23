@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { sanitizeResponseReport } from "@/lib/responseFeedback";
+import type { ResponseReport } from "@/lib/responseFeedback";
 import { supabase } from "@/lib/supabaseClient";
 
 type FeedbackCategory =
@@ -41,10 +43,31 @@ export default function HelpFeedbackButton({
     "idle"
   );
 
+  const [selectedReport, setSelectedReport] = useState<ResponseReport | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
+  const sending = useRef(false);
+  const opener = useRef<HTMLElement | null>(null);
+  const reportKey = useRef("");
+  function openFeedback(report: ResponseReport | null = null) {
+    if (sending.current) return;
+    opener.current = document.activeElement as HTMLElement;
+    const key = report ? `${report.sessionId}:${report.messageId}` : "";
+    if (key !== reportKey.current) setMessage("");
+    reportKey.current = key;
+    setSelectedReport(report);
+    setCategory("Tutor response issue");
+    setStatus("idle");
+    setIsOpen(true);
+  }
+  function closeFeedback() {
+    if (sending.current) return;
+    setIsOpen(false);
+    opener.current?.focus();
+  }
+
   useEffect(() => {
-    function handleOpenFeedback() {
-      setIsOpen(true);
-      setStatus("idle");
+    function handleOpenFeedback(event: Event) {
+      openFeedback(sanitizeResponseReport((event as CustomEvent).detail));
     }
 
     window.addEventListener("stepwise:open-feedback", handleOpenFeedback);
@@ -55,13 +78,16 @@ export default function HelpFeedbackButton({
   }, []);
 
   async function handleSubmit() {
+    if (sending.current || status === "sent") return;
     const trimmedMessage = message.trim();
 
     if (!trimmedMessage) {
+      setErrorMessage("Add a quick note about what happened.");
       setStatus("error");
       return;
     }
 
+    sending.current = true;
     setStatus("sending");
 
     try {
@@ -79,8 +105,8 @@ export default function HelpFeedbackButton({
         body: JSON.stringify({
           category,
           message: trimmedMessage,
-          pageUrl: window.location.href,
-          context,
+          pageUrl: window.location.origin + window.location.pathname,
+          context: selectedReport ?? context,
           browser: {
             userAgent: window.navigator.userAgent,
             language: window.navigator.language,
@@ -99,7 +125,10 @@ export default function HelpFeedbackButton({
       setStatus("sent");
       setMessage("");
     } catch {
+      setErrorMessage("Your feedback wasn’t sent. Your note is saved here; please try again.");
       setStatus("error");
+    } finally {
+      sending.current = false;
     }
   }
 
@@ -110,7 +139,7 @@ export default function HelpFeedbackButton({
           {showNudge && !isOpen && (
             <button
               type="button"
-              onClick={() => setIsOpen(true)}
+              onClick={() => openFeedback()}
               className="max-w-[15rem] rounded-2xl bg-white px-3.5 py-2 text-left text-xs leading-5 text-slate-600 shadow-lg shadow-slate-200/80 ring-1 ring-slate-200 transition hover:-translate-y-0.5 hover:text-slate-900"
             >
               Still having trouble? Send feedback.
@@ -120,8 +149,7 @@ export default function HelpFeedbackButton({
           <button
             type="button"
             onClick={() => {
-              setIsOpen(true);
-              setStatus("idle");
+              openFeedback();
             }}
             aria-label="Open help and feedback"
             className="flex h-12 items-center gap-2 rounded-full bg-slate-950 px-4 text-sm font-semibold text-white shadow-lg shadow-slate-300/80 transition hover:-translate-y-0.5 hover:bg-slate-800 focus:outline-none focus:ring-4 focus:ring-cyan-100"
@@ -137,10 +165,20 @@ export default function HelpFeedbackButton({
       {isOpen && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/25 px-4 py-4 backdrop-blur-sm sm:items-center"
-          onClick={() => setIsOpen(false)}
+          onClick={closeFeedback}
         >
           <div
-            className="w-full max-w-md rounded-[1.75rem] bg-white p-5 shadow-2xl shadow-slate-900/20 ring-1 ring-slate-200"
+            role="dialog" aria-modal="true" aria-label="Send feedback"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") closeFeedback();
+              if (event.key === "Tab") {
+                const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not(:disabled), select, textarea"));
+                const first = controls[0], last = controls[controls.length - 1];
+                if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+                else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+              }
+            }}
+            className="max-h-[90dvh] overflow-y-auto w-full max-w-md rounded-[1.75rem] bg-white p-5 shadow-2xl shadow-slate-900/20 ring-1 ring-slate-200"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-4">
@@ -149,25 +187,29 @@ export default function HelpFeedbackButton({
                   Found something confusing?
                 </p>
                 <p className="mt-1 text-sm leading-6 text-slate-500">
-                  Tell us what felt off. StepWise quietly includes recent
-                  session context so the team can understand what happened.
+                  Tell us what felt off. Nothing is sent until you select Send Feedback.
                 </p>
               </div>
 
               <button
                 type="button"
-                onClick={() => setIsOpen(false)}
+                onClick={closeFeedback}
                 className="rounded-full px-3 py-1.5 text-sm font-semibold text-slate-400 hover:bg-slate-50 hover:text-slate-700"
               >
                 Close
               </button>
             </div>
 
+            {selectedReport && <div className="mt-3 rounded-xl bg-slate-50 p-3 text-xs">
+              <p className="font-semibold">Selected tutor response</p>
+              <p className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap">{selectedReport.response}</p>
+              <p className="mt-2 text-slate-500">{selectedReport.problem ? "Includes this response’s problem and preceding student message." : "Includes the preceding student message. The original problem was not saved for this response."}</p>
+            </div>}
             <div className="mt-5">
               <label className="text-xs font-semibold uppercase text-slate-400">
                 What is this about?
               </label>
-              <select
+              <select aria-label="Feedback category" disabled={status === "sending"}
                 value={category}
                 onChange={(event) =>
                   setCategory(event.target.value as FeedbackCategory)
@@ -184,7 +226,7 @@ export default function HelpFeedbackButton({
               <span className="text-xs font-semibold uppercase text-slate-400">
                 What happened?
               </span>
-              <textarea
+              <textarea autoFocus disabled={status === "sending"}
                 value={message}
                 onChange={(event) => {
                   setMessage(event.target.value);
@@ -197,8 +239,7 @@ export default function HelpFeedbackButton({
             </label>
 
             <div className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-500">
-              We include recent messages, the current problem, and basic browser
-              info when available. No extra setup needed.
+              {selectedReport ? "Only the selected exchange, problem when available, and basic browser information are included. Attachments and unrelated chat history are excluded." : "Includes recent session context and basic browser information when available."}
             </div>
 
             {status === "sent" && (
@@ -209,14 +250,14 @@ export default function HelpFeedbackButton({
 
             {status === "error" && (
               <p className="mt-3 rounded-2xl bg-slate-50 px-4 py-3 text-sm leading-6 text-slate-600">
-                Add a quick note, then try sending again.
+                {errorMessage}
               </p>
             )}
 
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={status === "sending"}
+              disabled={status === "sending" || status === "sent"}
               className="mt-4 min-h-11 w-full rounded-full bg-cyan-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm shadow-cyan-100 transition hover:bg-cyan-600 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               {status === "sending" ? "Sending..." : "Send Feedback"}
